@@ -1,0 +1,54 @@
+# Test with retries on a flaky endpoint
+- method: GET
+  url: https://httpbin.org/status/503
+  options:
+    retries: 3
+    follow_redirect: false
+  asserts:
+    status:
+      - op: equals
+        value: 503
+
+# Test redirect following
+- method: GET
+  url: https://httpbin.org/redirect-to?url=https://httpbin.org/get
+  options:
+    follow_redirect: true
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.url
+        op: equals
+        value: "https://httpbin.org/get"
+
+# Test without following redirects
+- method: GET
+  url: https://httpbin.org/redirect-to?url=https://httpbin.org/get
+  options:
+    follow_redirect: false
+  asserts:
+    status:
+      - op: equals
+        value: 302
+
+# Test absolute redirect
+- method: GET
+  url: https://httpbin.org/absolute-redirect/2
+  options:
+    follow_redirect: true
+  asserts:
+    status:
+      - op: equals
+        value: 200
+
+# Test relative redirect
+- method: GET
+  url: https://httpbin.org/relative-redirect/1
+  options:
+    follow_redirect: true
+  asserts:
+    status:
+      - op: equals
+        value: 200 

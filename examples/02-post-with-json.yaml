@@ -1,0 +1,24 @@
+- method: POST
+  url: https://httpbin.org/post
+  headers:
+    Content-Type: application/json
+  body: |
+    {
+      "name": "John Doe",
+      "email": "john@example.com",
+      "age": 30
+    }
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.json.name
+        op: equals
+        value: "John Doe"
+      - path: $.json.email
+        op: equals
+        value: "john@example.com"
+      - path: $.json.age
+        op: equals
+        value: 30 

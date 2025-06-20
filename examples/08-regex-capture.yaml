@@ -1,0 +1,47 @@
+- method: GET
+  url: https://httpbin.org/html
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    headers:
+      - name: Content-Type
+        op: contains
+        value: "text/html"
+  captures:
+    # Extract the title from HTML using regex
+    regex:
+      - name: page_title
+        pattern: '<title>(.*?)</title>'
+        group: 1
+      
+      # Extract all h1 headings
+      - name: main_heading
+        pattern: '<h1>(.*?)</h1>'
+        group: 1
+      
+      # Extract the full title tag
+      - name: full_title_tag
+        pattern: '<title>.*?</title>'
+        group: 0
+
+# Use extracted data in next request
+- method: POST
+  url: https://httpbin.org/post
+  headers:
+    Content-Type: application/json
+  body: |
+    {
+      "extracted_title": "{{.page_title}}",
+      "main_heading": "{{.main_heading}}",
+      "full_title_tag": "{{.full_title_tag}}"
+    }
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.json.extracted_title
+        op: exists
+      - path: $.json.main_heading
+        op: exists 

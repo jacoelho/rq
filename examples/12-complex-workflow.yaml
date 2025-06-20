@@ -1,0 +1,138 @@
+# Step 1: Get initial data and generate session info
+- method: GET
+  url: https://httpbin.org/uuid
+  asserts:
+    status:
+      - op: equals
+        value: 200
+  captures:
+    jsonpath:
+      - name: session_id
+        path: $.uuid
+
+# Step 2: Login simulation with session
+- method: POST
+  url: https://httpbin.org/post
+  headers:
+    Content-Type: application/json
+    X-Session-ID: "{{.session_id}}"
+    Authorization: "Bearer token-{{randomString 16}}"
+  body: |
+    {
+      "action": "login",
+      "session_id": "{{.session_id}}",
+      "username": "testuser",
+      "timestamp": "{{now}}",
+      "client_info": {
+        "user_agent": "rq-tool/1.0",
+        "request_id": "{{uuidv4}}"
+      }
+    }
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.json.action
+        op: equals
+        value: "login"
+      - path: $.json.session_id
+        op: exists
+      - path: $.json.username
+        op: equals
+        value: "testuser"
+  captures:
+    headers:
+      - name: auth_header
+        header_name: Authorization
+    jsonpath:
+      - name: client_request_id
+        path: $.json.client_info.request_id
+
+# Step 3: Get user profile with session
+- method: GET
+  url: https://httpbin.org/get?user_id=123&include_details=true
+  headers:
+    Authorization: "{{.auth_header}}"
+    X-Session-ID: "{{.session_id}}"
+    X-Request-ID: "{{.client_request_id}}"
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.args.user_id
+        op: equals
+        value: "123"
+      - path: $.args.include_details
+        op: equals
+        value: "true"
+      - path: $.headers.Authorization
+        op: exists
+  captures:
+    jsonpath:
+      - name: request_url
+        path: $.url
+
+# Step 4: Update user data
+- method: PUT
+  url: https://httpbin.org/put
+  headers:
+    Content-Type: application/json
+    Authorization: "{{.auth_header}}"
+    X-Session-ID: "{{.session_id}}"
+  body: |
+    {
+      "user_id": 123,
+      "session_id": "{{.session_id}}",
+      "updates": {
+        "last_login": "{{iso8601}}",
+        "login_count": {{randomInt 1 50}},
+        "preferences": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        }
+      },
+      "metadata": {
+        "updated_by": "{{.client_request_id}}",
+        "previous_request": "{{.request_url}}"
+      }
+    }
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.json.user_id
+        op: equals
+        value: 123
+      - path: $.json.updates.preferences.theme
+        op: equals
+        value: "dark"
+      - path: $.json.metadata.updated_by
+        op: exists
+
+# Step 5: Logout and cleanup
+- method: POST
+  url: https://httpbin.org/post
+  headers:
+    Content-Type: application/json
+    Authorization: "{{.auth_header}}"
+    X-Session-ID: "{{.session_id}}"
+  body: |
+    {
+      "action": "logout",
+      "session_id": "{{.session_id}}",
+      "timestamp": "{{timestamp}}"
+    }
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.json.action
+        op: equals
+        value: "logout"
+      - path: $.json.session_id
+        op: exists 
