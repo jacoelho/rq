@@ -1,0 +1,36 @@
+- method: POST
+  url: https://httpbin.org/post
+  headers:
+    Content-Type: application/json
+    X-Request-ID: "{{uuidv4}}"
+    X-Timestamp: "{{now}}"
+  body: |
+    {
+      "user_id": "{{uuidv4}}",
+      "username": "{{randomString 8}}",
+      "timestamp": "{{timestamp}}",
+      "random_number": {{randomInt 1 100}},
+      "encoded_data": "{{base64 "Hello World"}}",
+      "current_time": "{{iso8601}}"
+    }
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.json.username
+        op: length
+        value: 8
+      - path: $.json.random_number
+        op: exists
+      - path: $.json.encoded_data
+        op: equals
+        value: "SGVsbG8gV29ybGQ="
+      - path: $.json.current_time
+        op: exists
+  captures:
+    jsonpath:
+      - name: user_id
+        path: $.json.user_id
+      - name: username
+        path: $.json.username 

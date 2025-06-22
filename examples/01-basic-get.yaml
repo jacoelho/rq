@@ -1,0 +1,10 @@
+- method: GET
+  url: https://httpbin.org/get
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.url
+        op: equals
+        value: "https://httpbin.org/get" 

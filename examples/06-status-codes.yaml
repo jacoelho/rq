@@ -1,0 +1,43 @@
+# Test successful response
+- method: GET
+  url: https://httpbin.org/status/200
+  asserts:
+    status:
+      - op: equals
+        value: 200
+
+# Test client error
+- method: GET
+  url: https://httpbin.org/status/404
+  asserts:
+    status:
+      - op: equals
+        value: 404
+
+# Test server error
+- method: GET
+  url: https://httpbin.org/status/500
+  asserts:
+    status:
+      - op: equals
+        value: 500
+
+# Test redirect (should follow by default)
+- method: GET
+  url: https://httpbin.org/redirect/1
+  options:
+    follow_redirect: true
+  asserts:
+    status:
+      - op: equals
+        value: 200
+
+# Test redirect without following
+- method: GET
+  url: https://httpbin.org/status/302
+  options:
+    follow_redirect: false
+  asserts:
+    status:
+      - op: equals
+        value: 302 

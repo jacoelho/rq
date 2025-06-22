@@ -1,0 +1,35 @@
+# First request: Get a UUID from httpbin
+- method: GET
+  url: https://httpbin.org/uuid
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.uuid
+        op: exists
+  captures:
+    jsonpath:
+      - name: generated_uuid
+        path: $.uuid
+
+# Second request: Use the captured UUID in another request
+- method: POST
+  url: https://httpbin.org/post
+  headers:
+    Content-Type: application/json
+  body: |
+    {
+      "request_id": "{{.generated_uuid}}",
+      "message": "Hello from rq!"
+    }
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.json.request_id
+        op: exists
+      - path: $.json.message
+        op: equals
+        value: "Hello from rq!" 

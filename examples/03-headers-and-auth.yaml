@@ -1,0 +1,24 @@
+- method: GET
+  url: https://httpbin.org/headers
+  headers:
+    User-Agent: rq-tool/1.0
+    X-Custom-Header: test-value
+    Authorization: Bearer token123
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    headers:
+      - name: Content-Type
+        op: contains
+        value: "application/json"
+    jsonpath:
+      - path: $.headers.User-Agent
+        op: equals
+        value: "rq-tool/1.0"
+      - path: $.headers.X-Custom-Header
+        op: equals
+        value: "test-value"
+      - path: $.headers.Authorization
+        op: equals
+        value: "Bearer token123" 

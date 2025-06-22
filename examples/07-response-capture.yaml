@@ -1,0 +1,60 @@
+- method: GET
+  url: https://httpbin.org/json
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    headers:
+      - name: Content-Type
+        op: contains
+        value: "application/json"
+  captures:
+    # Capture HTTP status
+    status:
+      - name: response_status
+    
+    # Capture headers
+    headers:
+      - name: content_type
+        header_name: Content-Type
+      - name: server_header
+        header_name: Server
+    
+    # Capture JSON data
+    jsonpath:
+      - name: slideshow_title
+        path: $.slideshow.title
+      - name: slide_count
+        path: $.slideshow.slides
+      - name: first_slide_title
+        path: $.slideshow.slides[0].title
+    
+    # Capture entire response body
+    body:
+      - name: full_response
+
+# Use captured data in next request
+- method: POST
+  url: https://httpbin.org/post
+  headers:
+    Content-Type: application/json
+  body: |
+    {
+      "previous_status": {{.response_status}},
+      "previous_content_type": "{{.content_type}}",
+      "slideshow_info": {
+        "title": "{{.slideshow_title}}",
+        "slides": "{{.slide_count}}",
+        "first_slide": "{{.first_slide_title}}"
+      }
+    }
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.json.previous_status
+        op: equals
+        value: 200
+      - path: $.json.slideshow_info.title
+        op: exists 

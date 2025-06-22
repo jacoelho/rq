@@ -1,0 +1,65 @@
+# POST form data
+- method: POST
+  url: https://httpbin.org/post
+  headers:
+    Content-Type: application/x-www-form-urlencoded
+  body: "name=John+Doe&email=john%40example.com&age=30&newsletter=on"
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.form.name
+        op: equals
+        value: "John Doe"
+      - path: $.form.email
+        op: equals
+        value: "john@example.com"
+      - path: $.form.age
+        op: equals
+        value: "30"
+      - path: $.form.newsletter
+        op: equals
+        value: "on"
+    headers:
+      - name: Content-Type
+        op: contains
+        value: "application/json"
+
+# PUT with form data
+- method: PUT
+  url: https://httpbin.org/put
+  headers:
+    Content-Type: application/x-www-form-urlencoded
+  body: "action=update&id=123&status=active"
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.form.action
+        op: equals
+        value: "update"
+      - path: $.form.id
+        op: equals
+        value: "123"
+      - path: $.form.status
+        op: equals
+        value: "active"
+
+# PATCH with form data
+- method: PATCH
+  url: https://httpbin.org/patch
+  headers:
+    Content-Type: application/x-www-form-urlencoded
+  body: "field=value&timestamp={{timestamp}}"
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.form.field
+        op: equals
+        value: "value"
+      - path: $.form.timestamp
+        op: exists 

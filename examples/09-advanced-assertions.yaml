@@ -1,0 +1,61 @@
+- method: GET
+  url: https://httpbin.org/user-agent
+  headers:
+    User-Agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    
+    # Header assertions
+    headers:
+      - name: Content-Type
+        op: contains
+        value: "application/json"
+      - name: Server
+        op: exists
+    
+    # JSONPath assertions with different operators
+    jsonpath:
+      # Exact match
+      - path: $.user-agent
+        op: equals
+        value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
+      
+      # Contains check
+      - path: $.user-agent
+        op: contains
+        value: "Mozilla"
+      
+      # Regex match
+      - path: $.user-agent
+        op: regex
+        value: "Mozilla/[0-9]\\.[0-9]"
+      
+      # Existence check
+      - path: $.user-agent
+        op: exists
+
+# Test with delay endpoint to check response time expectations
+- method: GET
+  url: https://httpbin.org/delay/2
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.url
+        op: contains
+        value: "delay"
+
+# Test with different content types
+- method: GET
+  url: https://httpbin.org/xml
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    headers:
+      - name: Content-Type
+        op: contains
+        value: "application/xml" 
