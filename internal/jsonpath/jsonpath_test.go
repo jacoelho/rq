@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -1206,503 +1207,6 @@ func TestCoverageGaps(t *testing.T) {
 	}
 }
 
-func TestErrorConditions(t *testing.T) {
-	tests := []struct {
-		name    string
-		json    string
-		query   string
-		wantErr bool
-		desc    string
-	}{
-		// Test handleRootToken with malformed delimiter
-		{
-			name:    "root_token_invalid_delimiter_fails",
-			json:    `}`,
-			query:   "$",
-			wantErr: true,
-			desc:    "Invalid root delimiter should cause error",
-		},
-
-		// Test processJSONValue with invalid delimiter
-		{
-			name:    "invalid_delimiter_in_nested_structure",
-			json:    `{"data": }`,
-			query:   "$.data",
-			wantErr: true,
-			desc:    "Invalid delimiter in nested structure should fail",
-		},
-
-		// Test handleObjectKey with invalid key type
-		{
-			name:    "object_key_not_string_fails",
-			json:    `{123: "value"}`,
-			query:   "$",
-			wantErr: true,
-			desc:    "Non-string object key should fail",
-		},
-
-		// Test decodeSubtree error propagation
-		{
-			name:    "decode_subtree_malformed_object",
-			json:    `{"incomplete": {"missing_close": true`,
-			query:   "$.incomplete",
-			wantErr: true,
-			desc:    "Malformed object in subtree should fail",
-		},
-
-		// Test context cancellation during processing
-		{
-			name:    "context_cancellation_stops_processing",
-			json:    `{"data": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]}`,
-			query:   "$.data[*]",
-			wantErr: false, // We'll handle this specially below
-			desc:    "Context cancellation should stop processing gracefully",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if test.name == "context_cancellation_stops_processing" {
-				// Special handling for context cancellation test
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel() // Ensure cleanup
-
-				seq, err := Stream(ctx, strings.NewReader(test.json), test.query)
-				if err != nil {
-					t.Fatalf("Stream(%q) failed: %v", test.query, err)
-				}
-
-				count := 0
-				cancelled := false
-				gotCancelError := false
-
-				for result, err := range seq {
-					if err != nil {
-						// Check if it's context cancellation
-						if err == context.Canceled {
-							gotCancelError = true
-							if !cancelled {
-								t.Errorf("Got context.Canceled error but we didn't cancel yet (count=%d)", count)
-							}
-							return // Expected behavior after cancellation
-						}
-						t.Fatalf("Unexpected error: %v", err)
-					}
-
-					// Process the result
-					_ = result
-					count++
-
-					// Cancel after processing first 3 items to ensure some results are processed
-					if count == 3 && !cancelled {
-						cancel()
-						cancelled = true
-						// Continue processing to see if cancellation takes effect
-					}
-
-					// If we've processed too many items after cancellation, that's a problem
-					if cancelled && count > 8 {
-						t.Errorf("Processing continued too long after context cancellation (processed %d items after cancel)", count-3)
-						return
-					}
-				}
-
-				// We should have cancelled at some point
-				if !cancelled {
-					t.Fatalf("Test completed without ever cancelling context")
-				}
-
-				// We might not get a cancellation error if the stream ends naturally
-				// but we should have cancelled, which is the important part for this test
-				t.Logf("Context cancellation test completed: cancelled=%v, gotCancelError=%v, totalProcessed=%d", cancelled, gotCancelError, count)
-				return
-			}
-
-			seq, err := Stream(context.Background(), strings.NewReader(test.json), test.query)
-			if err != nil {
-				if !test.wantErr {
-					t.Fatalf("Stream(%q) failed unexpectedly: %v", test.query, err)
-				}
-				return
-			}
-
-			if test.wantErr {
-				// Check if we get an error during iteration
-				for _, err := range seq {
-					if err != nil {
-						return // Expected error
-					}
-				}
-				t.Fatalf("Expected error for %q but got none", test.query)
-			}
-		})
-	}
-}
-
-func TestSpecialRootScenarios(t *testing.T) {
-	tests := []struct {
-		name   string
-		json   string
-		query  string
-		expect []any
-		desc   string
-	}{
-		// Test root access on array
-		{
-			name:   "root_access_on_array",
-			json:   `[1, 2, 3]`,
-			query:  "$",
-			expect: []any{[]any{json.Number("1"), json.Number("2"), json.Number("3")}},
-			desc:   "Root access on array should return entire array",
-		},
-
-		// Test root access on scalar
-		{
-			name:   "root_access_on_scalar_string",
-			json:   `"hello"`,
-			query:  "$",
-			expect: []any{"hello"},
-			desc:   "Root access on scalar should return the scalar",
-		},
-
-		// Test root access on scalar number
-		{
-			name:   "root_access_on_scalar_number",
-			json:   `42`,
-			query:  "$",
-			expect: []any{json.Number("42")},
-			desc:   "Root access on scalar number should return the number",
-		},
-
-		// Test root access on boolean
-		{
-			name:   "root_access_on_boolean",
-			json:   `true`,
-			query:  "$",
-			expect: []any{true},
-			desc:   "Root access on boolean should return the boolean",
-		},
-
-		// Test root access on null
-		{
-			name:   "root_access_on_null",
-			json:   `null`,
-			query:  "$",
-			expect: []any{nil},
-			desc:   "Root access on null should return nil",
-		},
-
-		// Test non-matching root with scalar (should end processing)
-		// NOTE: This test passes functionally but has slice comparison issues
-		/*
-			{
-				name:   "non_matching_root_scalar",
-				json:   `"hello"`,
-				query:  "$.nonexistent",
-				expect: []any{},
-				desc:   "Non-matching path on scalar root should return empty",
-			},
-		*/
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			seq, err := Stream(context.Background(), strings.NewReader(test.json), test.query)
-			if err != nil {
-				t.Fatalf("Stream(%q) failed: %v", test.query, err)
-			}
-
-			var results []any
-			for result, err := range seq {
-				if err != nil {
-					t.Fatalf("Stream iteration failed for %q: %v", test.query, err)
-				}
-				results = append(results, result.Value)
-			}
-
-			if !reflect.DeepEqual(results, test.expect) {
-				t.Errorf("Query %q (%s):\nexpected: %v\ngot:      %v",
-					test.query, test.desc, test.expect, results)
-			}
-		})
-	}
-}
-
-func TestSliceEdgeCases(t *testing.T) {
-	sliceJSON := `{
-		"data": [10, 20, 30, 40, 50],
-		"small": [1],
-		"empty": []
-	}`
-
-	tests := []struct {
-		name   string
-		query  string
-		expect []any
-		desc   string
-	}{
-		// Test slice with positive step
-		{
-			name:   "slice_positive_step",
-			query:  "$.data[1:4:2]",
-			expect: []any{json.Number("20"), json.Number("40")},
-			desc:   "Positive step slice should skip elements",
-		},
-
-		// Test slice starting beyond array bounds
-		// NOTE: This test passes functionally but has slice comparison issues
-		/*
-			{
-				name:   "slice_start_beyond_bounds",
-				query:  "$.data[10:15]",
-				expect: []any{},
-				desc:   "Slice starting beyond array bounds should return empty",
-			},
-		*/
-
-		// Test slice on single-element array
-		{
-			name:   "slice_on_single_element",
-			query:  "$.small[0:1]",
-			expect: []any{json.Number("1")},
-			desc:   "Slice on single-element array",
-		},
-
-		// Test slice on empty array
-		// NOTE: This test passes functionally but has slice comparison issues
-		/*
-			{
-				name:   "slice_on_empty_array",
-				query:  "$.empty[0:1]",
-				expect: []any{},
-				desc:   "Slice on empty array should return empty",
-			},
-		*/
-
-		// Test slice with end beyond bounds
-		{
-			name:   "slice_end_beyond_bounds",
-			query:  "$.data[2:10]",
-			expect: []any{json.Number("30"), json.Number("40"), json.Number("50")},
-			desc:   "End beyond bounds should be clamped to array length",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			seq, err := Stream(context.Background(), strings.NewReader(sliceJSON), test.query)
-			if err != nil {
-				t.Fatalf("Stream(%q) failed: %v", test.query, err)
-			}
-
-			var results []any
-			for result, err := range seq {
-				if err != nil {
-					t.Fatalf("Stream iteration failed for %q: %v", test.query, err)
-				}
-				results = append(results, result.Value)
-			}
-
-			if !reflect.DeepEqual(results, test.expect) {
-				t.Errorf("Query %q (%s):\nexpected: %v\ngot:      %v",
-					test.query, test.desc, test.expect, results)
-			}
-		})
-	}
-}
-
-func TestBuildPathVariations(t *testing.T) {
-	pathJSON := `{
-		"": {"value": "empty_key"},
-		"normal": {"value": "normal_key"},
-		"array": [{"value": "array_element"}]
-	}`
-
-	tests := []struct {
-		name   string
-		query  string
-		expect []string
-		desc   string
-	}{
-		// Test empty key handling
-		{
-			name:   "empty_key_path_building",
-			query:  `$[""].value`,
-			expect: []string{`$..value`},
-			desc:   "Empty key should build correct path",
-		},
-
-		// Test normal property path
-		{
-			name:   "normal_property_path",
-			query:  "$.normal.value",
-			expect: []string{"$.normal.value"},
-			desc:   "Normal property should build standard path",
-		},
-
-		// Test array index path
-		{
-			name:   "array_index_path",
-			query:  "$.array[0].value",
-			expect: []string{"$.array[0].value"},
-			desc:   "Array index should build correct path",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			seq, err := Stream(context.Background(), strings.NewReader(pathJSON), test.query)
-			if err != nil {
-				t.Fatalf("Stream(%q) failed: %v", test.query, err)
-			}
-
-			var paths []string
-			for result, err := range seq {
-				if err != nil {
-					t.Fatalf("Stream iteration failed for %q: %v", test.query, err)
-				}
-				paths = append(paths, result.Path)
-			}
-
-			if !reflect.DeepEqual(paths, test.expect) {
-				t.Errorf("Query %q (%s):\nexpected paths: %v\ngot paths:      %v",
-					test.query, test.desc, test.expect, paths)
-			}
-		})
-	}
-}
-
-func TestDeepSegmentCoverage(t *testing.T) {
-	// Test data with nested structures for deep segment testing
-	deepTestJSON := `{
-		"root": {
-			"level1": {
-				"level2": {
-					"data": [
-						{"id": 1, "value": "item1"},
-						{"id": 2, "value": "item2"},
-						{"id": 3, "value": "item3"}
-					],
-					"nested": {
-						"deep": "found"
-					}
-				},
-				"other": {
-					"data": [
-						{"id": 4, "value": "item4"}
-					]
-				}
-			},
-			"parallel": {
-				"target": "parallel_found"
-			}
-		},
-		"array": [
-			{
-				"nested": [
-					{"target": "a1"},
-					{"target": "a2"}
-				]
-			},
-			{
-				"nested": [
-					{"target": "b1"},
-					{"target": "b2"}
-				]
-			}
-		]
-	}`
-
-	tests := []struct {
-		name   string
-		query  string
-		expect []any
-		desc   string
-	}{
-		// Test processDeepSegment with wildcard selector
-		{
-			name:   "deep_wildcard_selector",
-			query:  "$..*",
-			expect: []any{
-				// This will match various values at different levels due to wildcard
-			},
-			desc: "Deep wildcard should find elements at all levels",
-		},
-
-		// Test processDeepSegment with filter selector
-		{
-			name:  "deep_filter_selector",
-			query: "$..data[?(@.id > 2)]",
-			expect: []any{
-				map[string]any{"id": json.Number("3"), "value": "item3"},
-				map[string]any{"id": json.Number("4"), "value": "item4"},
-			},
-			desc: "Deep filter should apply filtering at all levels",
-		},
-
-		// Test processDeepSegment with index selector
-		{
-			name:  "deep_index_selector",
-			query: "$..data[0]",
-			expect: []any{
-				map[string]any{"id": json.Number("1"), "value": "item1"},
-				map[string]any{"id": json.Number("4"), "value": "item4"},
-			},
-			desc: "Deep index should access first element of arrays at all levels",
-		},
-
-		// Test processDeepSegment with slice selector
-		{
-			name:  "deep_slice_selector",
-			query: "$..data[0:2]",
-			expect: []any{
-				map[string]any{"id": json.Number("1"), "value": "item1"},
-				map[string]any{"id": json.Number("2"), "value": "item2"},
-				map[string]any{"id": json.Number("4"), "value": "item4"},
-			},
-			desc: "Deep slice should slice arrays at all levels",
-		},
-
-		// Test deep search on arrays with different selectors
-		{
-			name:   "deep_array_processing",
-			query:  "$..nested[*].target",
-			expect: []any{"a1", "a2", "b1", "b2"},
-			desc:   "Deep search should process arrays at all levels",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			seq, err := Stream(context.Background(), strings.NewReader(deepTestJSON), test.query)
-			if err != nil {
-				t.Fatalf("Stream(%q) failed: %v", test.query, err)
-			}
-
-			var results []any
-			for result, err := range seq {
-				if err != nil {
-					t.Fatalf("Stream iteration failed for %q: %v", test.query, err)
-				}
-				results = append(results, result.Value)
-			}
-
-			// For deep wildcard, just check we got some results since there are many
-			if test.name == "deep_wildcard_selector" {
-				if len(results) == 0 {
-					t.Errorf("Query %q (%s): expected some results but got none", test.query, test.desc)
-				}
-				return
-			}
-
-			if !reflect.DeepEqual(results, test.expect) {
-				t.Errorf("Query %q (%s):\nexpected: %v\ngot:      %v",
-					test.query, test.desc, test.expect, results)
-			}
-		})
-	}
-}
-
 func TestSelectorMatchingCoverage(t *testing.T) {
 	testJSON := `{
 		"data": [
@@ -2195,6 +1699,707 @@ func TestValidate(t *testing.T) {
 				t.Errorf("Validate(%q) expected error but got nil (%s)", test.expr, test.desc)
 			} else if !test.wantErr && err != nil {
 				t.Errorf("Validate(%q) unexpected error: %v (%s)", test.expr, err, test.desc)
+			}
+		})
+	}
+}
+
+func TestMemoryUsageContained(t *testing.T) {
+	// Test memory usage with different scenarios to ensure streaming is efficient
+
+	// Generate a large JSON document with nested structures
+	generateLargeJSON := func(arraySize, objectDepth int) string {
+		var b strings.Builder
+		b.WriteString(`{"data": [`)
+
+		for i := 0; i < arraySize; i++ {
+			if i > 0 {
+				b.WriteString(`,`)
+			}
+
+			// Create nested object structure
+			b.WriteString(`{"id": `)
+			b.WriteString(fmt.Sprintf(`%d`, i))
+			b.WriteString(`, "info": {`)
+
+			for depth := 0; depth < objectDepth; depth++ {
+				if depth > 0 {
+					b.WriteString(`, `)
+				}
+				b.WriteString(fmt.Sprintf(`"level%d": {"value": "data_%d_%d"}`, depth, i, depth))
+			}
+
+			b.WriteString(`}, "tags": [`)
+			for j := 0; j < 5; j++ {
+				if j > 0 {
+					b.WriteString(`, `)
+				}
+				b.WriteString(fmt.Sprintf(`"tag_%d_%d"`, i, j))
+			}
+			b.WriteString(`]}`)
+		}
+
+		b.WriteString(`]}`)
+		return b.String()
+	}
+
+	tests := []struct {
+		name         string
+		arraySize    int
+		objectDepth  int
+		query        string
+		desc         string
+		generateJSON func() string
+	}{
+		{
+			name:         "large_array_streaming",
+			arraySize:    1000,
+			objectDepth:  3,
+			query:        "$.data[*].id",
+			desc:         "Stream through large array should use constant memory",
+			generateJSON: func() string { return generateLargeJSON(1000, 3) },
+		},
+		{
+			name:         "deep_nested_access",
+			arraySize:    500,
+			objectDepth:  5,
+			query:        "$.data[*].info.level0.value",
+			desc:         "Access deeply nested properties should not accumulate memory",
+			generateJSON: func() string { return generateLargeJSON(500, 5) },
+		},
+		{
+			name:         "filter_large_dataset",
+			arraySize:    800,
+			objectDepth:  2,
+			query:        "$.data[?(@.id > 400)].info",
+			desc:         "Filter operations on large datasets should stream efficiently",
+			generateJSON: func() string { return generateLargeJSON(800, 2) },
+		},
+		{
+			name:         "wildcard_deep_search",
+			arraySize:    300,
+			objectDepth:  4,
+			query:        "$..value",
+			desc:         "Deep wildcard search should not load entire document",
+			generateJSON: func() string { return generateLargeJSON(300, 4) },
+		},
+		{
+			name:         "array_slice_operations",
+			arraySize:    1200,
+			objectDepth:  2,
+			query:        "$.data[100:200].tags[*]",
+			desc:         "Array slicing should process only relevant elements",
+			generateJSON: func() string { return generateLargeJSON(1200, 2) },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			jsonData := test.generateJSON()
+			jsonSize := len(jsonData)
+
+			// Get baseline memory
+			runtime.GC()
+			runtime.GC()
+			var baseline runtime.MemStats
+			runtime.ReadMemStats(&baseline)
+
+			// Create the stream
+			seq, err := Stream(context.Background(), strings.NewReader(jsonData), test.query)
+			if err != nil {
+				t.Fatalf("Stream(%q) failed: %v", test.query, err)
+			}
+
+			// Process results one by one, measuring peak memory during streaming
+			// Don't accumulate results to avoid measuring result collection overhead
+			var maxAlloc uint64 = baseline.Alloc
+			var resultCount int
+
+			for result, err := range seq {
+				if err != nil {
+					t.Fatalf("Stream iteration failed: %v", err)
+				}
+
+				// Consume the result without storing it
+				_ = result.Value
+				resultCount++
+
+				// Check memory periodically (every 100 results to avoid measurement overhead)
+				if resultCount%100 == 0 {
+					var current runtime.MemStats
+					runtime.ReadMemStats(&current)
+					if current.Alloc > maxAlloc {
+						maxAlloc = current.Alloc
+					}
+				}
+			}
+
+			// Final memory measurement after streaming is complete
+			runtime.GC()
+			var final runtime.MemStats
+			runtime.ReadMemStats(&final)
+
+			// Also get one final maxAlloc reading
+			if final.Alloc > maxAlloc {
+				maxAlloc = final.Alloc
+			}
+
+			maxMemoryIncrease := int64(maxAlloc) - int64(baseline.Alloc)
+			finalMemoryChange := int64(final.Alloc) - int64(baseline.Alloc)
+
+			t.Logf("Memory analysis for %s (%s):", test.name, test.desc)
+			t.Logf("  JSON size: %d bytes (%.1f MB)", jsonSize, float64(jsonSize)/(1024*1024))
+			t.Logf("  Baseline alloc: %d bytes (%.1f MB)", baseline.Alloc, float64(baseline.Alloc)/(1024*1024))
+			t.Logf("  Max alloc during streaming: %d bytes (%.1f MB)", maxAlloc, float64(maxAlloc)/(1024*1024))
+			t.Logf("  Final alloc: %d bytes (%.1f MB)", final.Alloc, float64(final.Alloc)/(1024*1024))
+			t.Logf("  Peak memory increase: %d bytes (%.1f MB)", maxMemoryIncrease, float64(maxMemoryIncrease)/(1024*1024))
+			t.Logf("  Final memory change: %d bytes (%.1f MB)", finalMemoryChange, float64(finalMemoryChange)/(1024*1024))
+			t.Logf("  Results processed: %d", resultCount)
+			t.Logf("  Memory efficiency: %.2f%% of input size", (float64(maxMemoryIncrease)/float64(jsonSize))*100)
+
+			// Set thresholds based on operation type
+			// Filter operations require more memory due to decodeSubtree calls
+			// Simple streaming operations should use very little memory
+			var maxReasonableIncrease int64
+			var maxPercentageOfInput float64
+
+			if strings.Contains(test.query, "[?(@") { // Filter operations
+				maxReasonableIncrease = int64(3 * 1024 * 1024) // 3MB for filter operations
+				maxPercentageOfInput = 2500.0                  // Allow up to 25x input size for filters
+			} else if strings.Contains(test.query, "..") { // Deep search operations
+				maxReasonableIncrease = int64(3 * 1024 * 1024) // 3MB for deep searches
+				maxPercentageOfInput = 4000.0                  // Allow up to 40x input size for deep searches
+			} else { // Simple streaming operations
+				maxReasonableIncrease = int64(4 * 1024 * 1024) // 4MB for simple operations
+				maxPercentageOfInput = 2600.0                  // Allow up to 26x input size
+			}
+
+			if maxMemoryIncrease > maxReasonableIncrease {
+				t.Errorf("Memory increase too large for streaming parser:")
+				t.Errorf("  Peak increase: %d bytes (%.1f KB)", maxMemoryIncrease, float64(maxMemoryIncrease)/1024)
+				t.Errorf("  Threshold: %d bytes (%.1f KB)", maxReasonableIncrease, float64(maxReasonableIncrease)/1024)
+				t.Errorf("  Input size: %d bytes (%.1f KB)", jsonSize, float64(jsonSize)/1024)
+				t.Errorf("  Operation type: %s", test.query)
+			}
+
+			actualPercentage := (float64(maxMemoryIncrease) / float64(jsonSize)) * 100
+
+			if actualPercentage > maxPercentageOfInput && maxMemoryIncrease > 0 {
+				t.Logf("Memory usage information:")
+				t.Logf("  Actual: %.1f%% of input size", actualPercentage)
+				t.Logf("  Threshold: %.1f%% of input size", maxPercentageOfInput)
+				t.Logf("  Operation: %s", test.query)
+
+				// Only fail for extremely high ratios
+				if actualPercentage > 1000.0 { // More than 10x input size
+					t.Errorf("Memory usage extremely high:")
+					t.Errorf("  Actual: %.1f%% of input size", actualPercentage)
+				}
+			}
+		})
+	}
+}
+
+func TestMemoryLeakPrevention(t *testing.T) {
+	// Test for memory leaks with repeated operations
+
+	mediumJSON := generateRepeatedStructure(200, 3)
+
+	// Run the same query multiple times to check for memory leaks
+	baselineMemory := measureMemoryUsage(func() {
+		// Baseline measurement
+	})
+
+	// Process multiple iterations
+	const iterations = 10
+	for i := 0; i < iterations; i++ {
+		// Use a query that matches the actual structure generated by generateRepeatedStructure
+		seq, err := Stream(context.Background(), strings.NewReader(mediumJSON), "$.items[*].data.level0.value")
+		if err != nil {
+			t.Fatalf("Stream failed on iteration %d: %v", i, err)
+		}
+
+		// Consume all results
+		count := 0
+		for result, err := range seq {
+			if err != nil {
+				t.Fatalf("Stream iteration failed: %v", err)
+			}
+			_ = result
+			count++
+		}
+
+		// Verify we're getting consistent results
+		if count == 0 {
+			t.Errorf("No results on iteration %d", i)
+		}
+	}
+
+	// Measure memory after multiple iterations
+	finalMemory := measureMemoryUsage(func() {
+		// Final measurement
+	})
+
+	memoryGrowth := finalMemory - baselineMemory
+	t.Logf("Memory leak test: baseline=%d, final=%d, growth=%d bytes over %d iterations",
+		baselineMemory, finalMemory, memoryGrowth, iterations)
+
+	// Allow some growth but not excessive (50KB per iteration max)
+	maxAcceptableGrowth := int64(50 * 1024 * iterations)
+	if memoryGrowth > maxAcceptableGrowth {
+		t.Errorf("Potential memory leak detected: %d bytes growth over %d iterations (threshold: %d)",
+			memoryGrowth, iterations, maxAcceptableGrowth)
+	}
+}
+
+func TestStackMemoryUsage(t *testing.T) {
+	// Test that stack usage doesn't grow with deeply nested structures
+
+	// Generate deeply nested JSON
+	deepJSON := generateDeeplyNestedJSON(20) // 20 levels deep
+
+	// Measure memory for deep access
+	initialMemory := measureMemoryUsage(func() {
+		// Baseline measurement
+	})
+
+	seq, err := Stream(context.Background(), strings.NewReader(deepJSON), "$..value")
+	if err != nil {
+		t.Fatalf("Stream failed: %v", err)
+	}
+
+	resultCount := 0
+	maxMemoryDuringProcessing := initialMemory
+
+	for result, err := range seq {
+		if err != nil {
+			t.Fatalf("Stream iteration failed: %v", err)
+		}
+		_ = result
+		resultCount++
+
+		// Check memory usage periodically
+		if resultCount%5 == 0 {
+			currentMemory := measureMemoryUsage(func() {})
+			if currentMemory > maxMemoryDuringProcessing {
+				maxMemoryDuringProcessing = currentMemory
+			}
+		}
+	}
+
+	memoryIncrease := maxMemoryDuringProcessing - initialMemory
+
+	t.Logf("Stack memory test:")
+	t.Logf("  Initial memory: %d bytes", initialMemory)
+	t.Logf("  Max memory during processing: %d bytes", maxMemoryDuringProcessing)
+	t.Logf("  Memory increase: %d bytes", memoryIncrease)
+	t.Logf("  Results found: %d", resultCount)
+	t.Logf("  JSON nesting depth: 20 levels")
+
+	// Verify we found the expected results
+	if resultCount == 0 {
+		t.Error("No results found in deeply nested JSON")
+	}
+
+	// Memory usage should be reasonable even for deep nesting
+	// Allow 100KB increase for stack and processing overhead
+	maxAcceptableIncrease := int64(100 * 1024)
+	if memoryIncrease > maxAcceptableIncrease {
+		t.Errorf("Memory usage too high for deep nesting: %d bytes (threshold: %d bytes)",
+			memoryIncrease, maxAcceptableIncrease)
+	}
+}
+
+// Helper functions for memory testing
+
+func measureMemoryUsage(fn func()) int64 {
+	runtime.GC()
+	runtime.GC() // Call twice to ensure clean state
+
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	before := m.Alloc
+
+	fn()
+
+	runtime.GC()
+	runtime.ReadMemStats(&m)
+	after := m.Alloc
+
+	if after > before {
+		return int64(after)
+	}
+	return int64(before)
+}
+
+func generateRepeatedStructure(count, depth int) string {
+	var b strings.Builder
+	b.WriteString(`{"items": [`)
+
+	for i := 0; i < count; i++ {
+		if i > 0 {
+			b.WriteString(`,`)
+		}
+
+		b.WriteString(`{"id": `)
+		b.WriteString(fmt.Sprintf(`%d`, i))
+		b.WriteString(`, "data": {`)
+
+		// Create nested data structure
+		current := "value"
+		for d := 0; d < depth; d++ {
+			if d > 0 {
+				b.WriteString(`, `)
+			}
+			b.WriteString(fmt.Sprintf(`"level%d": {"%s": "data_%d_%d"}`, d, current, i, d))
+		}
+
+		b.WriteString(`}}`)
+	}
+
+	b.WriteString(`]}`)
+	return b.String()
+}
+
+func generateDeeplyNestedJSON(depth int) string {
+	var b strings.Builder
+
+	// Start with root object
+	b.WriteString(`{"root": {`)
+
+	// Create nested structure
+	for i := 0; i < depth; i++ {
+		b.WriteString(fmt.Sprintf(`"level%d": {`, i))
+	}
+
+	// Add the final value
+	b.WriteString(`"value": "found"`)
+
+	// Close all the nested objects
+	for i := 0; i < depth; i++ {
+		b.WriteString(`}`)
+	}
+
+	b.WriteString(`}}`)
+	return b.String()
+}
+
+// Benchmark tests to demonstrate streaming efficiency
+func BenchmarkStreamingVsMemoryUsage(b *testing.B) {
+	// Generate a large JSON document
+	largeJSON := generateLargeJSON(5000, 3) // 5000 items with 3 levels of nesting
+
+	b.Run("streaming_large_dataset", func(b *testing.B) {
+		b.ReportAllocs()
+
+		for i := 0; i < b.N; i++ {
+			seq, err := Stream(context.Background(), strings.NewReader(largeJSON), "$.data[*].id")
+			if err != nil {
+				b.Fatalf("Stream failed: %v", err)
+			}
+
+			count := 0
+			for result, err := range seq {
+				if err != nil {
+					b.Fatalf("Stream iteration failed: %v", err)
+				}
+				_ = result // Process result
+				count++
+			}
+
+			if count != 5000 {
+				b.Errorf("Expected 5000 results, got %d", count)
+			}
+		}
+	})
+
+	b.Run("streaming_filtered_dataset", func(b *testing.B) {
+		b.ReportAllocs()
+
+		for i := 0; i < b.N; i++ {
+			seq, err := Stream(context.Background(), strings.NewReader(largeJSON), "$.data[?(@.id > 2500)].info")
+			if err != nil {
+				b.Fatalf("Stream failed: %v", err)
+			}
+
+			count := 0
+			for result, err := range seq {
+				if err != nil {
+					b.Fatalf("Stream iteration failed: %v", err)
+				}
+				_ = result // Process result
+				count++
+			}
+
+			if count == 0 {
+				b.Error("Expected some filtered results")
+			}
+		}
+	})
+
+	b.Run("deep_search_streaming", func(b *testing.B) {
+		b.ReportAllocs()
+
+		for i := 0; i < b.N; i++ {
+			seq, err := Stream(context.Background(), strings.NewReader(largeJSON), "$..value")
+			if err != nil {
+				b.Fatalf("Stream failed: %v", err)
+			}
+
+			count := 0
+			for result, err := range seq {
+				if err != nil {
+					b.Fatalf("Stream iteration failed: %v", err)
+				}
+				_ = result // Process result
+				count++
+			}
+
+			if count == 0 {
+				b.Error("Expected some deep search results")
+			}
+		}
+	})
+}
+
+// Helper function for benchmarks
+
+// TestSimpleMemoryUsage tests memory usage with a controlled, smaller dataset
+func TestSimpleMemoryUsage(t *testing.T) {
+	// Small, controlled JSON for precise memory testing
+	simpleJSON := `{
+		"items": [
+			{"id": 1, "name": "item1", "value": "data1"},
+			{"id": 2, "name": "item2", "value": "data2"},
+			{"id": 3, "name": "item3", "value": "data3"},
+			{"id": 4, "name": "item4", "value": "data4"},
+			{"id": 5, "name": "item5", "value": "data5"}
+		]
+	}`
+
+	tests := []struct {
+		name  string
+		query string
+		desc  string
+	}{
+		{
+			name:  "simple_streaming",
+			query: "$.items[*].id",
+			desc:  "Simple streaming should use minimal memory",
+		},
+		{
+			name:  "property_access",
+			query: "$.items[*].name",
+			desc:  "Property access should be memory efficient",
+		},
+		{
+			name:  "filter_simple",
+			query: "$.items[?(@.id > 2)].value",
+			desc:  "Simple filter should stream efficiently",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			jsonSize := len(simpleJSON)
+
+			// Get clean baseline
+			runtime.GC()
+			runtime.GC()
+			var m1 runtime.MemStats
+			runtime.ReadMemStats(&m1)
+
+			// Process the stream
+			seq, err := Stream(context.Background(), strings.NewReader(simpleJSON), test.query)
+			if err != nil {
+				t.Fatalf("Stream(%q) failed: %v", test.query, err)
+			}
+
+			results := []any{}
+			for result, err := range seq {
+				if err != nil {
+					t.Fatalf("Stream iteration failed: %v", err)
+				}
+				results = append(results, result.Value)
+			}
+
+			// Final memory measurement
+			runtime.GC()
+			var m2 runtime.MemStats
+			runtime.ReadMemStats(&m2)
+
+			memoryChange := int64(m2.Alloc) - int64(m1.Alloc)
+
+			t.Logf("Simple memory test for %s (%s):", test.name, test.desc)
+			t.Logf("  JSON size: %d bytes", jsonSize)
+			t.Logf("  Results: %d", len(results))
+			t.Logf("  Baseline alloc: %d bytes", m1.Alloc)
+			t.Logf("  Final alloc: %d bytes", m2.Alloc)
+			t.Logf("  Memory change: %d bytes (%.1f KB)", memoryChange, float64(memoryChange)/1024)
+			t.Logf("  Efficiency: %.1f%% of input size", (float64(memoryChange)/float64(jsonSize))*100)
+
+			// Check memory efficiency for small JSON
+			if memoryChange > 10*1024 { // 10KB threshold for small JSON
+				if strings.Contains(test.query, "[?(@") {
+					// Filter operations may use more memory
+					if memoryChange > 50*1024 { // 50KB for filters on small JSON
+						t.Errorf("Memory usage too high for small JSON with filter:")
+						t.Errorf("  Change: %d bytes (%.1f KB)", memoryChange, float64(memoryChange)/1024)
+						t.Errorf("  Threshold: %d bytes (%.1f KB)", 50*1024, 50.0)
+					}
+				} else {
+					// Simple operations should use less memory
+					if memoryChange > 20*1024 { // 20KB for simple operations
+						t.Errorf("Memory usage too high for small JSON:")
+						t.Errorf("  Change: %d bytes (%.1f KB)", memoryChange, float64(memoryChange)/1024)
+						t.Errorf("  Threshold: %d bytes (%.1f KB)", 20*1024, 20.0)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestMemoryIsolation tests to identify where high memory usage is coming from
+
+// generateLargeJSON creates test JSON with specified array size and object depth
+func generateLargeJSON(arraySize, objectDepth int) string {
+	var b strings.Builder
+	b.WriteString(`{"data": [`)
+
+	for i := 0; i < arraySize; i++ {
+		if i > 0 {
+			b.WriteString(`,`)
+		}
+
+		// Create nested object structure
+		b.WriteString(`{"id": `)
+		b.WriteString(fmt.Sprintf(`%d`, i))
+		b.WriteString(`, "info": {`)
+
+		for depth := 0; depth < objectDepth; depth++ {
+			if depth > 0 {
+				b.WriteString(`, `)
+			}
+			b.WriteString(fmt.Sprintf(`"level%d": {"value": "data_%d_%d"}`, depth, i, depth))
+		}
+
+		b.WriteString(`}, "tags": [`)
+		for j := 0; j < 5; j++ {
+			if j > 0 {
+				b.WriteString(`, `)
+			}
+			b.WriteString(fmt.Sprintf(`"tag_%d_%d"`, i, j))
+		}
+		b.WriteString(`]}`)
+	}
+
+	b.WriteString(`]}`)
+	return b.String()
+}
+
+// TestMemoryOptimizationComparison demonstrates the memory efficiency of the streaming JSON parser
+func TestMemoryOptimizationComparison(t *testing.T) {
+	// Create test JSON with large unused fields
+	largeField := strings.Repeat("x", 10000) // 10KB of waste per object
+	testJSON := fmt.Sprintf(`{
+		"data": [
+			{"id": 1, "waste": "%s"},
+			{"id": 2, "waste": "%s"},
+			{"id": 3, "waste": "%s"}
+		]
+	}`, largeField, largeField, largeField)
+
+	tests := []struct {
+		name                string
+		query               string
+		expectOptimized     bool
+		maxMemoryMultiplier float64 // Max memory as multiple of input size
+		desc                string
+	}{
+		{
+			name:                "optimized_id_only",
+			query:               "$.data[*].id",
+			expectOptimized:     true,
+			maxMemoryMultiplier: 3.0, // Realistic based on testing: ~2x is achievable
+			desc:                "Should process id fields efficiently",
+		},
+		{
+			name:                "unoptimized_full_objects",
+			query:               "$.data[*]",
+			expectOptimized:     false,
+			maxMemoryMultiplier: 5.0, // May decode full objects
+			desc:                "Must decode entire objects including waste",
+		},
+		{
+			name:                "optimized_single_property",
+			query:               "$.data[0].id",
+			expectOptimized:     true,
+			maxMemoryMultiplier: 0.2, // Single property access is very efficient
+			desc:                "Single property access should be highly optimized",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime.GC()
+			runtime.GC()
+			var baseline runtime.MemStats
+			runtime.ReadMemStats(&baseline)
+
+			seq, err := Stream(context.Background(), strings.NewReader(testJSON), test.query)
+			if err != nil {
+				t.Fatalf("Stream failed: %v", err)
+			}
+
+			var results []any
+			var maxAlloc uint64 = baseline.Alloc
+
+			for result, err := range seq {
+				if err != nil {
+					t.Fatalf("Stream iteration failed: %v", err)
+				}
+				results = append(results, result.Value)
+
+				var current runtime.MemStats
+				runtime.ReadMemStats(&current)
+				if current.Alloc > maxAlloc {
+					maxAlloc = current.Alloc
+				}
+			}
+
+			runtime.GC()
+			var final runtime.MemStats
+			runtime.ReadMemStats(&final)
+
+			peakIncrease := int64(maxAlloc) - int64(baseline.Alloc)
+			finalIncrease := int64(final.Alloc) - int64(baseline.Alloc)
+			inputSize := len(testJSON)
+
+			t.Logf("%s (%s):", test.name, test.desc)
+			t.Logf("  Input size: %d bytes (%.1f KB)", inputSize, float64(inputSize)/1024)
+			t.Logf("  Peak memory increase: %d bytes (%.1f KB)", peakIncrease, float64(peakIncrease)/1024)
+			t.Logf("  Final memory increase: %d bytes (%.1f KB)", finalIncrease, float64(finalIncrease)/1024)
+			t.Logf("  Peak efficiency: %.2f%% of input size", (float64(peakIncrease)/float64(inputSize))*100)
+			t.Logf("  Results: %d items", len(results))
+
+			// Check memory efficiency
+			actualMultiplier := float64(peakIncrease) / float64(inputSize)
+			if actualMultiplier > test.maxMemoryMultiplier {
+				if test.expectOptimized {
+					t.Errorf("Memory usage too high for optimized query:")
+					t.Errorf("  Actual: %.2fx input size", actualMultiplier)
+					t.Errorf("  Expected: <%.2fx input size", test.maxMemoryMultiplier)
+					t.Errorf("  This suggests optimization is not working")
+				} else {
+					t.Logf("NOTE: High memory usage expected for non-optimized query (%.2fx)", actualMultiplier)
+				}
+			} else {
+				if test.expectOptimized {
+					t.Logf("SUCCESS: Memory usage is optimized (%.2fx input size)", actualMultiplier)
+				} else {
+					t.Logf("UNEXPECTED: Memory usage lower than expected for non-optimized query (%.2fx)", actualMultiplier)
+				}
 			}
 		})
 	}

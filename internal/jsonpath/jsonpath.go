@@ -17,7 +17,7 @@ import (
 // It contains both the canonical path and the matched value.
 type Result struct {
 	Path  string // canonical JSONPath
-	Value any    // scalar value, or decoded map[string]any / []any for containers
+	Value any    // scalar value, decoded map[string]any / []any, or other types
 }
 
 type streamContext struct {
@@ -241,19 +241,22 @@ func (sc *streamContext) handleArrayToken(tok any, top *containerFrame) bool {
 func (sc *streamContext) processFilterMatch(tok any) bool {
 	if sel, ok, filterSegIdx := isFilterMatch(sc.segs, sc.pathStack.ToSlice(), sc.valueStack.ToSlice()); ok {
 		if d, ok := tok.(json.Delim); ok {
-			obj, err := decodeSubtree(sc.dec, d)
+			// Decode the complete object for correctness
+			// Future optimization: we could implement a streaming filter evaluator
+			// that evaluates the filter while streaming through the object
+			fullObj, err := decodeSubtree(sc.dec, d)
 			if err != nil {
 				sc.yield(Result{}, err)
 				return true // indicates we handled this case
 			}
 
-			if peekElem, ok := sc.pathStack.Peek(); ok && sel.match(peekElem, obj) {
+			if peekElem, ok := sc.pathStack.Peek(); ok && sel.match(peekElem, fullObj) {
 				remainingSegs := sc.segs[filterSegIdx+1:]
 				if len(remainingSegs) == 0 {
 					pathStr := sc.buildPath()
-					sc.yield(Result{Path: pathStr, Value: obj}, nil)
+					sc.yield(Result{Path: pathStr, Value: fullObj}, nil)
 				} else {
-					sc.processRemainingSegments(obj, remainingSegs, sc.buildPath(), sc.yield)
+					sc.processRemainingSegments(fullObj, remainingSegs, sc.buildPath(), sc.yield)
 				}
 			}
 
@@ -269,6 +272,14 @@ func (sc *streamContext) processArrayElement(dValue any, isMatch bool) bool {
 	return sc.processJSONValue(dValue, isMatch)
 }
 
+// hasRemainingSegments checks if there are more segments to process after the current position
+func (sc *streamContext) hasRemainingSegments() bool {
+	pathDepth := sc.pathStack.Size()
+	// Check if we have more segments than our current path depth
+	// Need to account for the fact that pathStack includes the root element
+	return len(sc.segs) > pathDepth-1
+}
+
 // processJSONValue handles both container and scalar JSON values with shared logic
 func (sc *streamContext) processJSONValue(value any, isMatch bool) bool {
 	switch dValue := value.(type) {
@@ -279,17 +290,24 @@ func (sc *streamContext) processJSONValue(value any, isMatch bool) bool {
 		}
 
 		if isMatch {
-			pathStr := sc.buildPath()
-			actualValue, err := decodeSubtree(sc.dec, dValue)
-			if err != nil {
-				sc.yield(Result{}, err)
-				return false
+			// Check if we have remaining segments to process
+			if sc.hasRemainingSegments() {
+				// Stream through the container to process remaining segments
+				return sc.streamThroughContainer(dValue)
+			} else {
+				// No remaining segments, decode the full container for final result
+				pathStr := sc.buildPath()
+				actualValue, err := decodeSubtree(sc.dec, dValue)
+				if err != nil {
+					sc.yield(Result{}, err)
+					return false
+				}
+				if !sc.yield(Result{Path: pathStr, Value: actualValue}, nil) {
+					return false
+				}
+				sc.pathStack.Pop()
+				sc.valueDone()
 			}
-			if !sc.yield(Result{Path: pathStr, Value: actualValue}, nil) {
-				return false
-			}
-			sc.pathStack.Pop()
-			sc.valueDone()
 		} else {
 			sc.valueStack.Push(nil)
 			if dValue == '{' {
@@ -314,6 +332,32 @@ func (sc *streamContext) processJSONValue(value any, isMatch bool) bool {
 	return true
 }
 
+// streamThroughContainer processes a container by streaming through it
+// instead of decoding the entire structure into memory
+func (sc *streamContext) streamThroughContainer(openingDelim json.Delim) bool {
+	if openingDelim == '{' {
+		return sc.streamThroughObject()
+	} else if openingDelim == '[' {
+		return sc.streamThroughArray()
+	}
+	return false
+}
+
+// streamThroughObject processes an object by streaming through its properties
+func (sc *streamContext) streamThroughObject() bool {
+	sc.valueStack.Push(nil)
+	sc.containerStack.Push(containerFrame{kind: kindObj, needKey: true})
+	return true
+}
+
+// streamThroughArray processes an array by streaming through its elements
+func (sc *streamContext) streamThroughArray() bool {
+	sc.valueStack.Push(nil)
+	sc.containerStack.Push(containerFrame{kind: kindArr})
+	return true
+}
+
+// decodeSubtree decodes a complete container structure
 func decodeSubtree(dec *json.Decoder, openingDelim json.Delim) (any, error) {
 	if openingDelim == '{' {
 		return decodeObjectSubtree(dec)
