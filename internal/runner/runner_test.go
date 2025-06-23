@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -14,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jacoelho/rq/internal/config"
 	"github.com/jacoelho/rq/internal/parser"
 )
 
@@ -62,8 +62,7 @@ func TestExecuteCaptures(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &config.Config{}
-	runner, _ := New(cfg)
+	runner := NewDefault()
 
 	tests := []struct {
 		name     string
@@ -514,4 +513,487 @@ func createTestCertificate(t *testing.T) *x509.Certificate {
 	}
 
 	return cert
+}
+
+func TestExecuteStepWithRetries(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		retries         int
+		serverResponses []struct {
+			status int
+			body   string
+		}
+		expectedAttempts    int
+		expectedError       bool
+		expectedStatus      int
+		assertionShouldPass bool
+	}{
+		{
+			name:    "no_retries_success",
+			retries: 0,
+			serverResponses: []struct {
+				status int
+				body   string
+			}{
+				{status: 200, body: `{"status": "success"}`},
+			},
+			expectedAttempts:    1,
+			expectedError:       false,
+			expectedStatus:      200,
+			assertionShouldPass: true,
+		},
+		{
+			name:    "no_retries_failure",
+			retries: 0,
+			serverResponses: []struct {
+				status int
+				body   string
+			}{
+				{status: 500, body: `{"status": "error"}`},
+			},
+			expectedAttempts:    1,
+			expectedError:       true,
+			expectedStatus:      500,
+			assertionShouldPass: false,
+		},
+		{
+			name:    "retry_until_success",
+			retries: 3,
+			serverResponses: []struct {
+				status int
+				body   string
+			}{
+				{status: 500, body: `{"status": "error"}`},
+				{status: 500, body: `{"status": "error"}`},
+				{status: 200, body: `{"status": "success"}`},
+			},
+			expectedAttempts:    3,
+			expectedError:       false,
+			expectedStatus:      200,
+			assertionShouldPass: true,
+		},
+		{
+			name:    "retry_all_attempts_fail",
+			retries: 2,
+			serverResponses: []struct {
+				status int
+				body   string
+			}{
+				{status: 500, body: `{"status": "error"}`},
+				{status: 500, body: `{"status": "error"}`},
+				{status: 500, body: `{"status": "error"}`},
+			},
+			expectedAttempts:    3,
+			expectedError:       true,
+			expectedStatus:      500,
+			assertionShouldPass: false,
+		},
+		{
+			name:    "retry_first_attempt_success",
+			retries: 3,
+			serverResponses: []struct {
+				status int
+				body   string
+			}{
+				{status: 200, body: `{"status": "success"}`},
+			},
+			expectedAttempts:    1,
+			expectedError:       false,
+			expectedStatus:      200,
+			assertionShouldPass: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attemptCount := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if attemptCount < len(tt.serverResponses) {
+					response := tt.serverResponses[attemptCount]
+					w.WriteHeader(response.status)
+					w.Write([]byte(response.body))
+				} else {
+					// Default to last response if we run out
+					lastResponse := tt.serverResponses[len(tt.serverResponses)-1]
+					w.WriteHeader(lastResponse.status)
+					w.Write([]byte(lastResponse.body))
+				}
+				attemptCount++
+			}))
+			defer server.Close()
+
+			runner := NewDefault()
+
+			step := parser.Step{
+				Method: "GET",
+				URL:    server.URL,
+				Options: parser.Options{
+					Retries: tt.retries,
+				},
+				Asserts: parser.Asserts{
+					Status: []parser.StatusAssert{
+						{
+							Predicate: parser.Predicate{
+								Operation: "equals",
+								Value:     200,
+							},
+						},
+					},
+				},
+			}
+
+			captures := make(map[string]any)
+			requestMade, err := runner.executeStep(context.Background(), step, captures)
+
+			if !requestMade {
+				t.Error("Expected request to be made")
+			}
+
+			if tt.expectedError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tt.expectedError && err != nil {
+				t.Errorf("Expected no error but got: %v", err)
+			}
+
+			if attemptCount != tt.expectedAttempts {
+				t.Errorf("Expected %d attempts, got %d", tt.expectedAttempts, attemptCount)
+			}
+		})
+	}
+}
+
+func TestExecuteStepWithRetriesCaptureFail(t *testing.T) {
+	t.Parallel()
+
+	attemptCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attemptCount++
+		w.WriteHeader(200)
+		if attemptCount <= 2 {
+			w.Write([]byte(`{"name": "invalid"}`)) // Will fail JSONPath capture assertion
+		} else {
+			w.Write([]byte(`{"name": "Alice"}`)) // Will succeed on 3rd attempt
+		}
+	}))
+	defer server.Close()
+
+	runner := NewDefault()
+
+	step := parser.Step{
+		Method: "GET",
+		URL:    server.URL,
+		Options: parser.Options{
+			Retries: 3,
+		},
+		Asserts: parser.Asserts{
+			JSONPath: []parser.JSONPathAssert{
+				{
+					Path: "$.name",
+					Predicate: parser.Predicate{
+						Operation: "equals",
+						Value:     "Alice",
+					},
+				},
+			},
+		},
+	}
+
+	captures := make(map[string]any)
+	requestMade, err := runner.executeStep(context.Background(), step, captures)
+
+	if !requestMade {
+		t.Error("Expected request to be made")
+	}
+
+	if err != nil {
+		t.Errorf("Expected success after retries but got error: %v", err)
+	}
+
+	if attemptCount != 3 {
+		t.Errorf("Expected 3 attempts, got %d", attemptCount)
+	}
+}
+
+func TestExecuteStepWithRetriesNoRetriesNeeded(t *testing.T) {
+	t.Parallel()
+
+	attemptCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attemptCount++
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status": "success"}`))
+	}))
+	defer server.Close()
+
+	runner := NewDefault()
+
+	step := parser.Step{
+		Method: "GET",
+		URL:    server.URL,
+		Options: parser.Options{
+			Retries: 5, // Has retries configured but shouldn't need them
+		},
+		Asserts: parser.Asserts{
+			Status: []parser.StatusAssert{
+				{
+					Predicate: parser.Predicate{
+						Operation: "equals",
+						Value:     200,
+					},
+				},
+			},
+		},
+	}
+
+	captures := make(map[string]any)
+	requestMade, err := runner.executeStep(context.Background(), step, captures)
+
+	if !requestMade {
+		t.Error("Expected request to be made")
+	}
+
+	if err != nil {
+		t.Errorf("Expected no error but got: %v", err)
+	}
+
+	if attemptCount != 1 {
+		t.Errorf("Expected 1 attempt (no retries needed), got %d", attemptCount)
+	}
+}
+
+func TestExecuteStepRetriesWithTemplateError(t *testing.T) {
+	t.Parallel()
+
+	runner := NewDefault()
+
+	step := parser.Step{
+		Method: "GET",
+		URL:    "{{.invalid_template",
+		Options: parser.Options{
+			Retries: 3,
+		},
+	}
+
+	captures := make(map[string]any)
+	requestMade, err := runner.executeStep(context.Background(), step, captures)
+
+	if requestMade {
+		t.Error("Expected no request to be made due to template error")
+	}
+
+	if err == nil {
+		t.Error("Expected error due to invalid template")
+	}
+
+	if !bytes.Contains([]byte(err.Error()), []byte("failed to process URL template")) {
+		t.Errorf("Expected template error, got: %v", err)
+	}
+}
+
+func TestValidateStep(t *testing.T) {
+	t.Parallel()
+
+	runner := NewDefault()
+
+	tests := []struct {
+		name        string
+		step        parser.Step
+		expectError bool
+		errorText   string
+	}{
+		{
+			name: "valid_step",
+			step: parser.Step{
+				Method: "GET",
+				URL:    "https://example.com",
+				Options: parser.Options{
+					Retries: 3,
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "empty_method",
+			step: parser.Step{
+				Method: "",
+				URL:    "https://example.com",
+			},
+			expectError: true,
+			errorText:   "step method cannot be empty",
+		},
+		{
+			name: "invalid_method",
+			step: parser.Step{
+				Method: "INVALID",
+				URL:    "https://example.com",
+			},
+			expectError: true,
+			errorText:   "unsupported HTTP method: INVALID",
+		},
+		{
+			name: "empty_url",
+			step: parser.Step{
+				Method: "GET",
+				URL:    "",
+			},
+			expectError: true,
+			errorText:   "step URL cannot be empty",
+		},
+		{
+			name: "negative_retries",
+			step: parser.Step{
+				Method: "GET",
+				URL:    "https://example.com",
+				Options: parser.Options{
+					Retries: -1,
+				},
+			},
+			expectError: true,
+			errorText:   "retries must be >= 0, got: -1",
+		},
+		{
+			name: "zero_retries",
+			step: parser.Step{
+				Method: "GET",
+				URL:    "https://example.com",
+				Options: parser.Options{
+					Retries: 0,
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_post_method",
+			step: parser.Step{
+				Method: "POST",
+				URL:    "https://example.com/api",
+				Body:   `{"key": "value"}`,
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_put_method",
+			step: parser.Step{
+				Method: "PUT",
+				URL:    "https://example.com/api/1",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_patch_method",
+			step: parser.Step{
+				Method: "PATCH",
+				URL:    "https://example.com/api/1",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_delete_method",
+			step: parser.Step{
+				Method: "DELETE",
+				URL:    "https://example.com/api/1",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_head_method",
+			step: parser.Step{
+				Method: "HEAD",
+				URL:    "https://example.com",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_options_method",
+			step: parser.Step{
+				Method: "OPTIONS",
+				URL:    "https://example.com",
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := runner.validateStep(tt.step)
+
+			if tt.expectError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Expected no error but got: %v", err)
+			}
+			if tt.expectError && err != nil && !bytes.Contains([]byte(err.Error()), []byte(tt.errorText)) {
+				t.Errorf("Expected error to contain %q, got: %v", tt.errorText, err)
+			}
+		})
+	}
+}
+
+func TestExecuteStepValidation(t *testing.T) {
+	t.Parallel()
+
+	runner := NewDefault()
+
+	tests := []struct {
+		name        string
+		step        parser.Step
+		expectError bool
+		errorText   string
+	}{
+		{
+			name: "invalid_step_negative_retries",
+			step: parser.Step{
+				Method: "GET",
+				URL:    "https://example.com",
+				Options: parser.Options{
+					Retries: -5,
+				},
+			},
+			expectError: true,
+			errorText:   "invalid step configuration",
+		},
+		{
+			name: "invalid_step_empty_method",
+			step: parser.Step{
+				Method: "",
+				URL:    "https://example.com",
+			},
+			expectError: true,
+			errorText:   "invalid step configuration",
+		},
+		{
+			name: "invalid_step_unsupported_method",
+			step: parser.Step{
+				Method: "TRACE",
+				URL:    "https://example.com",
+			},
+			expectError: true,
+			errorText:   "invalid step configuration",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			captures := make(map[string]any)
+			requestMade, err := runner.executeStep(context.Background(), tt.step, captures)
+
+			if !requestMade {
+				// Should not make requests for validation errors
+			}
+
+			if tt.expectError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Expected no error but got: %v", err)
+			}
+			if tt.expectError && err != nil && !bytes.Contains([]byte(err.Error()), []byte(tt.errorText)) {
+				t.Errorf("Expected error to contain %q, got: %v", tt.errorText, err)
+			}
+		})
+	}
 }
