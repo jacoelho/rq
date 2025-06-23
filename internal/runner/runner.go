@@ -10,6 +10,7 @@ import (
 	"net/http/httputil"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -216,9 +217,72 @@ func (r *Runner) executeFile(ctx context.Context, filename string) (int, error) 
 	return requestCount, nil
 }
 
-// executeStep executes a single HTTP request step.
-// Returns (requestMade, error) where requestMade indicates if an HTTP request was actually executed.
+// validateStep validates the step configuration before execution
+func (r *Runner) validateStep(step parser.Step) error {
+	if step.Method == "" {
+		return fmt.Errorf("step method cannot be empty")
+	}
+
+	validMethods := []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+	isValidMethod := slices.Contains(validMethods, step.Method)
+	if !isValidMethod {
+		return fmt.Errorf("unsupported HTTP method: %s", step.Method)
+	}
+
+	if step.URL == "" {
+		return fmt.Errorf("step URL cannot be empty")
+	}
+
+	if step.Options.Retries < 0 {
+		return fmt.Errorf("retries must be >= 0, got: %d", step.Options.Retries)
+	}
+
+	return nil
+}
+
+// executeStep executes a single HTTP request step with retry logic.
 func (r *Runner) executeStep(ctx context.Context, step parser.Step, captures map[string]any) (bool, error) {
+	if err := r.validateStep(step); err != nil {
+		return false, fmt.Errorf("invalid step configuration: %w", err)
+	}
+
+	maxAttempts := max(step.Options.Retries+1, 1)
+
+	var lastErr error
+	requestMade := false
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		select {
+		case <-ctx.Done():
+			return requestMade, ctx.Err()
+		default:
+		}
+
+		if r.config != nil && r.config.Debug && attempt > 1 {
+			fmt.Printf("Retry attempt %d of %d\n", attempt-1, step.Options.Retries)
+		}
+
+		attemptRequestMade, err := r.executeStepAttempt(ctx, step, captures)
+		if attemptRequestMade {
+			requestMade = true
+		}
+
+		if err != nil && !attemptRequestMade {
+			return requestMade, err
+		}
+
+		if attempt == maxAttempts || err == nil {
+			return requestMade, err
+		}
+
+		lastErr = err
+	}
+
+	return requestMade, lastErr
+}
+
+// executeStepAttempt executes a single attempt of an HTTP request step.
+func (r *Runner) executeStepAttempt(ctx context.Context, step parser.Step, captures map[string]any) (bool, error) {
 	url, err := template.Apply(step.URL, captures)
 	if err != nil {
 		return false, fmt.Errorf("failed to process URL template: %w", err)
@@ -247,7 +311,7 @@ func (r *Runner) executeStep(ctx context.Context, step parser.Step, captures map
 		req.Header.Set(name, processedValue)
 	}
 
-	if r.config.Debug {
+	if r.config != nil && r.config.Debug {
 		r.debugRequest(req)
 	}
 
@@ -268,7 +332,7 @@ func (r *Runner) executeStep(ctx context.Context, step parser.Step, captures map
 		return true, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	if r.config.Debug {
+	if r.config != nil && r.config.Debug {
 		r.debugResponse(resp, respBody)
 	}
 
