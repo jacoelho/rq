@@ -29,6 +29,11 @@ type streamContext struct {
 	yield          func(Result, error) bool
 }
 
+type tokenProcessor struct {
+	sc  *streamContext
+	ctx context.Context
+}
+
 func (sc *streamContext) buildPath() string {
 	var b strings.Builder
 	b.WriteByte('$')
@@ -83,72 +88,92 @@ func Stream(ctx context.Context, r io.Reader, expr string) (iter.Seq2[Result, er
 	dec := json.NewDecoder(r)
 	dec.UseNumber() // Use json.Number for all numeric values
 
-	seq := iter.Seq2[Result, error](func(yield func(Result, error) bool) {
+	return createSequence(ctx, dec, segs), nil
+}
+
+func createSequence(ctx context.Context, dec *json.Decoder, segs []segment) iter.Seq2[Result, error] {
+	return func(yield func(Result, error) bool) {
 		sc := &streamContext{
 			pathStack:      stack.New[pathElem](),
 			valueStack:     stack.New[any](),
 			containerStack: stack.New[containerFrame](),
 			segs:           segs,
 			dec:            dec,
-			yield: func(result Result, err error) bool {
-				if ctx.Err() != nil {
-					return yield(Result{}, ctx.Err())
-				}
-				return yield(result, err)
-			},
+			yield:          createYieldFunc(ctx, yield),
 		}
 
-		for {
-			if ctx.Err() != nil {
-				yield(Result{}, ctx.Err())
-				return
-			}
+		processor := &tokenProcessor{sc: sc, ctx: ctx}
+		processor.processTokens()
+	}
+}
 
-			tok, err := dec.Token()
-			if errors.Is(err, io.EOF) {
-				return
-			}
-			if err != nil {
-				yield(Result{}, err)
-				return
-			}
-
-			if sc.containerStack.IsEmpty() {
-				if !sc.handleRootToken(tok) {
-					return
-				}
-				if d, ok := tok.(json.Delim); ok {
-					switch d {
-					case '{':
-						sc.containerStack.Push(containerFrame{kind: kindObj, needKey: true})
-					case '[':
-						sc.containerStack.Push(containerFrame{kind: kindArr})
-					}
-					sc.pathStack.Push(pathElem{})
-					sc.valueStack.Push(nil)
-				}
-				continue
-			}
-
-			top := sc.containerStack.PeekRef()
-
-			if top.kind == kindObj {
-				if !sc.handleObjectToken(tok, top) {
-					return
-				}
-				continue
-			}
-
-			if top.kind == kindArr {
-				if !sc.handleArrayToken(tok, top) {
-					return
-				}
-				continue
-			}
+func createYieldFunc(ctx context.Context, yield func(Result, error) bool) func(Result, error) bool {
+	return func(result Result, err error) bool {
+		if ctx.Err() != nil {
+			return yield(Result{}, ctx.Err())
 		}
-	})
+		return yield(result, err)
+	}
+}
 
-	return seq, nil
+func (tp *tokenProcessor) processTokens() {
+	for {
+		if tp.ctx.Err() != nil {
+			tp.sc.yield(Result{}, tp.ctx.Err())
+			return
+		}
+
+		tok, err := tp.sc.dec.Token()
+		if errors.Is(err, io.EOF) {
+			return
+		}
+		if err != nil {
+			tp.sc.yield(Result{}, err)
+			return
+		}
+
+		if !tp.processToken(tok) {
+			return
+		}
+	}
+}
+
+func (tp *tokenProcessor) processToken(tok any) bool {
+	if tp.sc.containerStack.IsEmpty() {
+		return tp.handleRootLevel(tok)
+	}
+
+	top := tp.sc.containerStack.PeekRef()
+	switch top.kind {
+	case kindObj:
+		return tp.sc.handleObjectToken(tok, top)
+	case kindArr:
+		return tp.sc.handleArrayToken(tok, top)
+	default:
+		return false
+	}
+}
+
+func (tp *tokenProcessor) handleRootLevel(tok any) bool {
+	if !tp.sc.handleRootToken(tok) {
+		return false
+	}
+
+	if d, ok := tok.(json.Delim); ok {
+		tp.pushRootContainer(d)
+	}
+	return true
+}
+
+func (tp *tokenProcessor) pushRootContainer(d json.Delim) {
+	switch d {
+	case '{':
+		tp.sc.containerStack.Push(containerFrame{kind: kindObj, needKey: true})
+	case '[':
+		tp.sc.containerStack.Push(containerFrame{kind: kindArr})
+	}
+	tp.sc.pathStack.Push(pathElem{})
+	tp.sc.valueStack.Push(nil)
 }
 
 // Validate checks if a JSONPath expression is syntactically valid.
@@ -164,47 +189,56 @@ func (sc *streamContext) handleRootToken(tok any) bool {
 
 	switch d := tok.(type) {
 	case json.Delim:
-		if d != '{' && d != '[' {
-			sc.yield(Result{}, ErrMalformed)
-			return false
-		}
-		if !isRootMatch {
-			return true // Continue processing for non-matching root
-		}
-		actualValue, err := decodeSubtree(sc.dec, d)
-		if err != nil {
-			sc.yield(Result{}, err)
-			return false
-		}
-		return sc.yield(Result{Path: "$", Value: actualValue}, nil)
+		return sc.handleRootDelimiter(d, isRootMatch)
 	default:
-		if isRootMatch {
-			return sc.yield(Result{Path: "$", Value: tok}, nil)
-		}
-		return false // End processing for non-matching scalar root
+		return sc.handleRootScalar(tok, isRootMatch)
 	}
+}
+
+func (sc *streamContext) handleRootDelimiter(d json.Delim, isRootMatch bool) bool {
+	if !isValidRootDelimiter(d) {
+		sc.yield(Result{}, ErrMalformed)
+		return false
+	}
+
+	if !isRootMatch {
+		return true
+	}
+
+	actualValue, err := decodeSubtree(sc.dec, d)
+	if err != nil {
+		sc.yield(Result{}, err)
+		return false
+	}
+	return sc.yield(Result{Path: "$", Value: actualValue}, nil)
+}
+
+func (sc *streamContext) handleRootScalar(tok any, isRootMatch bool) bool {
+	if isRootMatch {
+		return sc.yield(Result{Path: "$", Value: tok}, nil)
+	}
+	return false
+}
+
+func isValidRootDelimiter(d json.Delim) bool {
+	return d == '{' || d == '['
 }
 
 func (sc *streamContext) handleObjectToken(tok any, top *containerFrame) bool {
 	if top.needKey {
 		return sc.handleObjectKey(tok, top)
 	}
-
 	return sc.handleObjectValue(tok, top)
 }
 
 func (sc *streamContext) handleObjectKey(tok any, top *containerFrame) bool {
 	if d, ok := tok.(json.Delim); ok && d == '}' {
-		sc.containerStack.Pop()
-		sc.pathStack.Pop()
-		sc.valueStack.Pop()
-		sc.valueDone()
-		return true
+		return sc.closeContainer()
 	}
 
 	key, ok := tok.(string)
 	if !ok {
-		return false // Invalid object key
+		return false
 	}
 
 	top.key = key
@@ -215,17 +249,12 @@ func (sc *streamContext) handleObjectKey(tok any, top *containerFrame) bool {
 func (sc *streamContext) handleObjectValue(tok any, top *containerFrame) bool {
 	sc.pathStack.Push(pathElem{name: top.key})
 	isMatch := sc.matchNow()
-
 	return sc.processJSONValue(tok, isMatch)
 }
 
 func (sc *streamContext) handleArrayToken(tok any, top *containerFrame) bool {
 	if d, ok := tok.(json.Delim); ok && d == ']' {
-		sc.containerStack.Pop()
-		sc.pathStack.Pop()
-		sc.valueStack.Pop()
-		sc.valueDone()
-		return true
+		return sc.closeContainer()
 	}
 
 	sc.pathStack.Push(pathElem{isArray: true, index: top.idx})
@@ -235,141 +264,164 @@ func (sc *streamContext) handleArrayToken(tok any, top *containerFrame) bool {
 	}
 
 	isMatch := sc.matchNow()
-	return sc.processArrayElement(tok, isMatch)
+	return sc.processJSONValue(tok, isMatch)
+}
+
+func (sc *streamContext) closeContainer() bool {
+	sc.containerStack.Pop()
+	sc.pathStack.Pop()
+	sc.valueStack.Pop()
+	sc.valueDone()
+	return true
 }
 
 func (sc *streamContext) processFilterMatch(tok any) bool {
-	if sel, ok, filterSegIdx := isFilterMatch(sc.segs, sc.pathStack.ToSlice(), sc.valueStack.ToSlice()); ok {
-		if d, ok := tok.(json.Delim); ok {
-			// Decode the complete object for correctness
-			// Future optimization: we could implement a streaming filter evaluator
-			// that evaluates the filter while streaming through the object
-			fullObj, err := decodeSubtree(sc.dec, d)
-			if err != nil {
-				sc.yield(Result{}, err)
-				return true // indicates we handled this case
-			}
-
-			if peekElem, ok := sc.pathStack.Peek(); ok && sel.match(peekElem, fullObj) {
-				remainingSegs := sc.segs[filterSegIdx+1:]
-				if len(remainingSegs) == 0 {
-					pathStr := sc.buildPath()
-					sc.yield(Result{Path: pathStr, Value: fullObj}, nil)
-				} else {
-					sc.processRemainingSegments(fullObj, remainingSegs, sc.buildPath(), sc.yield)
-				}
-			}
-
-			sc.pathStack.Pop()
-			sc.valueDone()
-			return true // indicates we handled this case
-		}
+	sel, ok, filterSegIdx := isFilterMatch(sc.segs, sc.pathStack.ToSlice(), sc.valueStack.ToSlice())
+	if !ok {
+		return false
 	}
-	return false // no filter match, continue with standard processing
+
+	d, ok := tok.(json.Delim)
+	if !ok {
+		return false
+	}
+
+	return sc.handleFilterContainer(d, sel, filterSegIdx)
 }
 
-func (sc *streamContext) processArrayElement(dValue any, isMatch bool) bool {
-	return sc.processJSONValue(dValue, isMatch)
+func (sc *streamContext) handleFilterContainer(d json.Delim, sel filterSel, filterSegIdx int) bool {
+	fullObj, err := decodeSubtree(sc.dec, d)
+	if err != nil {
+		sc.yield(Result{}, err)
+		return true
+	}
+
+	if peekElem, ok := sc.pathStack.Peek(); ok && sel.match(peekElem, fullObj) {
+		sc.processFilterResult(fullObj, filterSegIdx)
+	}
+
+	sc.pathStack.Pop()
+	sc.valueDone()
+	return true
 }
 
-// hasRemainingSegments checks if there are more segments to process after the current position
+func (sc *streamContext) processFilterResult(fullObj any, filterSegIdx int) {
+	remainingSegs := sc.segs[filterSegIdx+1:]
+	if len(remainingSegs) == 0 {
+		pathStr := sc.buildPath()
+		sc.yield(Result{Path: pathStr, Value: fullObj}, nil)
+	} else {
+		sc.processRemainingSegments(fullObj, remainingSegs, sc.buildPath(), sc.yield)
+	}
+}
+
 func (sc *streamContext) hasRemainingSegments() bool {
 	pathDepth := sc.pathStack.Size()
-	// Check if we have more segments than our current path depth
-	// Need to account for the fact that pathStack includes the root element
 	return len(sc.segs) > pathDepth-1
 }
 
-// processJSONValue handles both container and scalar JSON values with shared logic
 func (sc *streamContext) processJSONValue(value any, isMatch bool) bool {
 	switch dValue := value.(type) {
 	case json.Delim:
-		if dValue != '{' && dValue != '[' {
-			sc.yield(Result{}, fmt.Errorf("%w: unexpected delimiter", ErrMalformed))
+		return sc.handleDelimiterValue(dValue, isMatch)
+	default:
+		return sc.handleScalarValue(dValue, isMatch)
+	}
+}
+
+func (sc *streamContext) handleDelimiterValue(dValue json.Delim, isMatch bool) bool {
+	if !isValidDelimiter(dValue) {
+		sc.yield(Result{}, fmt.Errorf("%w: unexpected delimiter", ErrMalformed))
+		return false
+	}
+
+	if isMatch {
+		return sc.handleMatchingContainer(dValue)
+	}
+
+	return sc.handleNonMatchingContainer(dValue)
+}
+
+func (sc *streamContext) handleMatchingContainer(dValue json.Delim) bool {
+	if sc.hasRemainingSegments() {
+		return sc.streamThroughContainer(dValue)
+	}
+
+	return sc.decodeAndYieldContainer(dValue)
+}
+
+func (sc *streamContext) handleNonMatchingContainer(dValue json.Delim) bool {
+	sc.valueStack.Push(nil)
+	sc.pushContainer(dValue)
+	return true
+}
+
+func (sc *streamContext) decodeAndYieldContainer(dValue json.Delim) bool {
+	pathStr := sc.buildPath()
+	actualValue, err := decodeSubtree(sc.dec, dValue)
+	if err != nil {
+		sc.yield(Result{}, err)
+		return false
+	}
+
+	if !sc.yield(Result{Path: pathStr, Value: actualValue}, nil) {
+		return false
+	}
+
+	sc.pathStack.Pop()
+	sc.valueDone()
+	return true
+}
+
+func (sc *streamContext) handleScalarValue(value any, isMatch bool) bool {
+	sc.valueStack.Push(value)
+
+	if isMatch {
+		pathStr := sc.buildPath()
+		if !sc.yield(Result{Path: pathStr, Value: value}, nil) {
 			return false
 		}
-
-		if isMatch {
-			// Check if we have remaining segments to process
-			if sc.hasRemainingSegments() {
-				// Stream through the container to process remaining segments
-				return sc.streamThroughContainer(dValue)
-			} else {
-				// No remaining segments, decode the full container for final result
-				pathStr := sc.buildPath()
-				actualValue, err := decodeSubtree(sc.dec, dValue)
-				if err != nil {
-					sc.yield(Result{}, err)
-					return false
-				}
-				if !sc.yield(Result{Path: pathStr, Value: actualValue}, nil) {
-					return false
-				}
-				sc.pathStack.Pop()
-				sc.valueDone()
-			}
-		} else {
-			sc.valueStack.Push(nil)
-			if dValue == '{' {
-				sc.containerStack.Push(containerFrame{kind: kindObj, needKey: true})
-			} else {
-				sc.containerStack.Push(containerFrame{kind: kindArr})
-			}
-		}
-	default:
-		sc.valueStack.Push(dValue)
-		if isMatch {
-			pathStr := sc.buildPath()
-			if !sc.yield(Result{Path: pathStr, Value: dValue}, nil) {
-				return false
-			}
-		}
-		sc.pathStack.Pop()
-		sc.valueStack.Pop()
-		sc.valueDone()
 	}
 
+	sc.pathStack.Pop()
+	sc.valueStack.Pop()
+	sc.valueDone()
 	return true
 }
 
-// streamThroughContainer processes a container by streaming through it
-// instead of decoding the entire structure into memory
+func isValidDelimiter(d json.Delim) bool {
+	return d == '{' || d == '['
+}
+
+func (sc *streamContext) pushContainer(dValue json.Delim) {
+	switch dValue {
+	case '{':
+		sc.containerStack.Push(containerFrame{kind: kindObj, needKey: true})
+	case '[':
+		sc.containerStack.Push(containerFrame{kind: kindArr})
+	}
+}
+
 func (sc *streamContext) streamThroughContainer(openingDelim json.Delim) bool {
-	if openingDelim == '{' {
-		return sc.streamThroughObject()
-	} else if openingDelim == '[' {
-		return sc.streamThroughArray()
-	}
-	return false
-}
-
-// streamThroughObject processes an object by streaming through its properties
-func (sc *streamContext) streamThroughObject() bool {
 	sc.valueStack.Push(nil)
-	sc.containerStack.Push(containerFrame{kind: kindObj, needKey: true})
+	sc.pushContainer(openingDelim)
 	return true
 }
 
-// streamThroughArray processes an array by streaming through its elements
-func (sc *streamContext) streamThroughArray() bool {
-	sc.valueStack.Push(nil)
-	sc.containerStack.Push(containerFrame{kind: kindArr})
-	return true
-}
-
-// decodeSubtree decodes a complete container structure
 func decodeSubtree(dec *json.Decoder, openingDelim json.Delim) (any, error) {
-	if openingDelim == '{' {
+	switch openingDelim {
+	case '{':
 		return decodeObjectSubtree(dec)
-	}
-	if openingDelim == '[' {
+	case '[':
 		return decodeArraySubtree(dec)
+	default:
+		return nil, errors.New("internal error in decodeSubtree with invalid openingDelim")
 	}
-	return nil, errors.New("internal error in decodeSubtree with invalid openingDelim")
 }
 
 func decodeObjectSubtree(dec *json.Decoder) (any, error) {
 	obj := make(map[string]any)
+
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -385,25 +437,31 @@ func decodeObjectSubtree(dec *json.Decoder) (any, error) {
 			return nil, ErrMalformed
 		}
 
-		valueToken, err := dec.Token()
+		value, err := decodeObjectValue(dec)
 		if err != nil {
 			return nil, err
 		}
 
-		if vd, ok := valueToken.(json.Delim); ok && (vd == '{' || vd == '[') {
-			nestedValue, err := decodeSubtree(dec, vd)
-			if err != nil {
-				return nil, err
-			}
-			obj[key] = nestedValue
-		} else {
-			obj[key] = valueToken
-		}
+		obj[key] = value
 	}
+}
+
+func decodeObjectValue(dec *json.Decoder) (any, error) {
+	valueToken, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+
+	if vd, ok := valueToken.(json.Delim); ok && isValidDelimiter(vd) {
+		return decodeSubtree(dec, vd)
+	}
+
+	return valueToken, nil
 }
 
 func decodeArraySubtree(dec *json.Decoder) (any, error) {
 	arr := make([]any, 0)
+
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -426,11 +484,9 @@ func decodeArraySubtree(dec *json.Decoder) (any, error) {
 }
 
 func (sc *streamContext) processRemainingSegments(obj any, remainingSegs []segment, basePath string, yield func(Result, error) bool) {
-	if len(remainingSegs) == 0 {
-		return
+	if len(remainingSegs) > 0 {
+		sc.processSegments(obj, remainingSegs, basePath, yield)
 	}
-
-	sc.processSegments(obj, remainingSegs, basePath, yield)
 }
 
 func (sc *streamContext) processSegments(obj any, segs []segment, currentPath string, yield func(Result, error) bool) {
@@ -449,25 +505,39 @@ func (sc *streamContext) processSegments(obj any, segs []segment, currentPath st
 	}
 }
 
-// processDeepSegment handles descendant operator '..' by recursively searching all levels
 func (sc *streamContext) processDeepSegment(obj any, seg segment, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
+	sc.matchSelectorsAtCurrentLevel(obj, seg, remainingSegs, currentPath, yield)
+	sc.searchChildrenRecursively(obj, seg, remainingSegs, currentPath, yield)
+}
+
+func (sc *streamContext) matchSelectorsAtCurrentLevel(obj any, seg segment, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
 	for _, sel := range seg.sels {
 		if sc.matchesSelectorForValue(sel, obj) {
 			sc.processSegments(obj, remainingSegs, currentPath, yield)
 		}
 	}
+}
 
+func (sc *streamContext) searchChildrenRecursively(obj any, seg segment, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
 	switch v := obj.(type) {
 	case map[string]any:
-		for key, value := range v {
-			childPath := currentPath + "." + key
-			sc.processDeepSegment(value, seg, remainingSegs, childPath, yield)
-		}
+		sc.searchObjectChildren(v, seg, remainingSegs, currentPath, yield)
 	case []any:
-		for i, value := range v {
-			childPath := currentPath + "[" + strconv.Itoa(i) + "]"
-			sc.processDeepSegment(value, seg, remainingSegs, childPath, yield)
-		}
+		sc.searchArrayChildren(v, seg, remainingSegs, currentPath, yield)
+	}
+}
+
+func (sc *streamContext) searchObjectChildren(obj map[string]any, seg segment, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
+	for key, value := range obj {
+		childPath := sc.buildPropertyPath(currentPath, key)
+		sc.processDeepSegment(value, seg, remainingSegs, childPath, yield)
+	}
+}
+
+func (sc *streamContext) searchArrayChildren(arr []any, seg segment, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
+	for i, value := range arr {
+		childPath := currentPath + "[" + strconv.Itoa(i) + "]"
+		sc.processDeepSegment(value, seg, remainingSegs, childPath, yield)
 	}
 }
 
@@ -482,64 +552,81 @@ func (sc *streamContext) processChildSegment(obj any, seg segment, remainingSegs
 
 func (sc *streamContext) processObjectSegment(obj map[string]any, seg segment, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
 	for _, sel := range seg.sels {
-		switch s := sel.(type) {
-		case nameSel:
-			if value, exists := obj[string(s)]; exists {
-				childPath := sc.buildPropertyPath(currentPath, string(s))
-				sc.processSegments(value, remainingSegs, childPath, yield)
-			}
+		sc.processObjectSelector(obj, sel, remainingSegs, currentPath, yield)
+	}
+}
 
-		case wildcardSel:
-			for key, value := range obj {
-				childPath := sc.buildPropertyPath(currentPath, key)
-				sc.processSegments(value, remainingSegs, childPath, yield)
-			}
+func (sc *streamContext) processObjectSelector(obj map[string]any, sel selector, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
+	switch s := sel.(type) {
+	case nameSel:
+		sc.processNameSelector(obj, s, remainingSegs, currentPath, yield)
+	case wildcardSel:
+		sc.processObjectWildcard(obj, remainingSegs, currentPath, yield)
+	case filterSel:
+		// Filter selectors don't apply to objects in post-filter processing
+	default:
+		// Other selectors (indexSel, sliceSel) don't apply to objects
+	}
+}
 
-		case filterSel:
-			// Filter selectors don't apply to objects in post-filter processing
-			continue
+func (sc *streamContext) processNameSelector(obj map[string]any, sel nameSel, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
+	if value, exists := obj[string(sel)]; exists {
+		childPath := sc.buildPropertyPath(currentPath, string(sel))
+		sc.processSegments(value, remainingSegs, childPath, yield)
+	}
+}
 
-		default:
-			// Other selectors (indexSel, sliceSel) don't apply to objects
-			continue
-		}
+func (sc *streamContext) processObjectWildcard(obj map[string]any, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
+	for key, value := range obj {
+		childPath := sc.buildPropertyPath(currentPath, key)
+		sc.processSegments(value, remainingSegs, childPath, yield)
 	}
 }
 
 func (sc *streamContext) processArraySegment(arr []any, seg segment, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
 	for _, sel := range seg.sels {
-		switch s := sel.(type) {
-		case indexSel:
-			idx := int(s)
-			if idx >= 0 && idx < len(arr) {
-				childPath := currentPath + "[" + strconv.Itoa(idx) + "]"
-				sc.processSegments(arr[idx], remainingSegs, childPath, yield)
-			}
+		sc.processArraySelector(arr, sel, remainingSegs, currentPath, yield)
+	}
+}
 
-		case sliceSel:
-			sc.processSliceSelector(arr, s, remainingSegs, currentPath, yield)
+func (sc *streamContext) processArraySelector(arr []any, sel selector, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
+	switch s := sel.(type) {
+	case indexSel:
+		sc.processIndexSelector(arr, s, remainingSegs, currentPath, yield)
+	case sliceSel:
+		sc.processSliceSelector(arr, s, remainingSegs, currentPath, yield)
+	case wildcardSel:
+		sc.processArrayWildcard(arr, remainingSegs, currentPath, yield)
+	case filterSel:
+		sc.processArrayFilter(arr, s, remainingSegs, currentPath, yield)
+	case nameSel:
+		// Name selectors don't apply to arrays
+	default:
+		// Unknown selector type
+	}
+}
 
-		case wildcardSel:
-			for i, value := range arr {
-				childPath := currentPath + "[" + strconv.Itoa(i) + "]"
-				sc.processSegments(value, remainingSegs, childPath, yield)
-			}
+func (sc *streamContext) processIndexSelector(arr []any, sel indexSel, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
+	idx := int(sel)
+	if idx >= 0 && idx < len(arr) {
+		childPath := currentPath + "[" + strconv.Itoa(idx) + "]"
+		sc.processSegments(arr[idx], remainingSegs, childPath, yield)
+	}
+}
 
-		case nameSel:
-			// Name selectors don't apply to arrays
-			continue
+func (sc *streamContext) processArrayWildcard(arr []any, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
+	for i, value := range arr {
+		childPath := currentPath + "[" + strconv.Itoa(i) + "]"
+		sc.processSegments(value, remainingSegs, childPath, yield)
+	}
+}
 
-		case filterSel:
-			for i, value := range arr {
-				pe := pathElem{isArray: true, index: i}
-				if s.match(pe, value) {
-					childPath := currentPath + "[" + strconv.Itoa(i) + "]"
-					sc.processSegments(value, remainingSegs, childPath, yield)
-				}
-			}
-
-		default:
-			continue
+func (sc *streamContext) processArrayFilter(arr []any, sel filterSel, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
+	for i, value := range arr {
+		pe := pathElem{isArray: true, index: i}
+		if sel.match(pe, value) {
+			childPath := currentPath + "[" + strconv.Itoa(i) + "]"
+			sc.processSegments(value, remainingSegs, childPath, yield)
 		}
 	}
 }
@@ -551,50 +638,48 @@ func (sc *streamContext) processSliceSelector(arr []any, slice sliceSel, remaini
 	}
 
 	if step > 0 {
-		start := slice.start
-		end := min(slice.end, len(arr))
-
-		for i := start; i < end; i += step {
-			if i >= 0 && i < len(arr) {
-				childPath := currentPath + "[" + strconv.Itoa(i) + "]"
-				sc.processSegments(arr[i], remainingSegs, childPath, yield)
-			}
-		}
+		sc.processForwardSlice(arr, slice, step, remainingSegs, currentPath, yield)
 	} else {
-		start := slice.start
-		end := slice.end
-		if start >= len(arr) {
-			start = len(arr) - 1
-		}
+		sc.processBackwardSlice(arr, slice, step, remainingSegs, currentPath, yield)
+	}
+}
 
-		for i := start; i > end; i += step {
-			if i >= 0 && i < len(arr) {
-				childPath := currentPath + "[" + strconv.Itoa(i) + "]"
-				sc.processSegments(arr[i], remainingSegs, childPath, yield)
-			}
+func (sc *streamContext) processForwardSlice(arr []any, slice sliceSel, step int, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
+	start := slice.start
+	end := min(slice.end, len(arr))
+
+	for i := start; i < end; i += step {
+		if i >= 0 && i < len(arr) {
+			childPath := currentPath + "[" + strconv.Itoa(i) + "]"
+			sc.processSegments(arr[i], remainingSegs, childPath, yield)
 		}
 	}
 }
 
-// matchesSelectorForValue checks if a value matches a selector (used for deep scans)
+func (sc *streamContext) processBackwardSlice(arr []any, slice sliceSel, step int, remainingSegs []segment, currentPath string, yield func(Result, error) bool) {
+	start := slice.start
+	if start >= len(arr) {
+		start = len(arr) - 1
+	}
+	end := slice.end
+
+	for i := start; i > end; i += step {
+		if i >= 0 && i < len(arr) {
+			childPath := currentPath + "[" + strconv.Itoa(i) + "]"
+			sc.processSegments(arr[i], remainingSegs, childPath, yield)
+		}
+	}
+}
+
 func (sc *streamContext) matchesSelectorForValue(sel selector, value any) bool {
 	switch s := sel.(type) {
 	case wildcardSel:
 		return true
-
-	case nameSel:
-		// Name selectors only match object properties, not standalone values
+	case nameSel, indexSel, sliceSel:
 		return false
-
-	case indexSel, sliceSel:
-		// Array selectors only match array elements, not standalone values
-		return false
-
 	case filterSel:
-		// For deep scans, we can apply filters directly to values
 		pe := pathElem{}
 		return s.match(pe, value)
-
 	default:
 		return false
 	}
