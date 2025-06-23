@@ -37,16 +37,13 @@ type Runner struct {
 // New creates a new Runner with the provided configuration.
 // If creation fails, returns nil runner and exit result.
 func New(cfg *config.Config) (*Runner, *exit.Result) {
-	// Create HTTP client from configuration
 	client, err := cfg.HTTPClient()
 	if err != nil {
 		return nil, exit.Errorf("Error creating runner: %v\n", err)
 	}
 
-	// Create rate limiter from configuration
 	rateLimiter := ratelimit.New(cfg.RateLimit)
 
-	// Create formatter - for now we default to stdout format
 	formatter := stdout.New()
 
 	return &Runner{
@@ -58,7 +55,7 @@ func New(cfg *config.Config) (*Runner, *exit.Result) {
 	}, nil
 }
 
-// NewDefault creates a new Runner with default configuration for backward compatibility.
+// NewDefault creates a new Runner with default configuration.
 func NewDefault() *Runner {
 	return &Runner{
 		client: &http.Client{
@@ -194,7 +191,7 @@ func (r *Runner) executeFile(ctx context.Context, filename string) (int, error) 
 		return 0, fmt.Errorf("failed to parse file %s: %w", filename, err)
 	}
 
-	// Start with configured variables and add runtime captures
+	// start with configured variables and add runtime captures
 	captures := make(map[string]any)
 	maps.Copy(captures, r.variables)
 
@@ -222,7 +219,6 @@ func (r *Runner) executeFile(ctx context.Context, filename string) (int, error) 
 // executeStep executes a single HTTP request step.
 // Returns (requestMade, error) where requestMade indicates if an HTTP request was actually executed.
 func (r *Runner) executeStep(ctx context.Context, step parser.Step, captures map[string]any) (bool, error) {
-	// Apply template substitution
 	url, err := template.Apply(step.URL, captures)
 	if err != nil {
 		return false, fmt.Errorf("failed to process URL template: %w", err)
@@ -233,7 +229,6 @@ func (r *Runner) executeStep(ctx context.Context, step parser.Step, captures map
 		return false, fmt.Errorf("failed to process body template: %w", err)
 	}
 
-	// Create request
 	var bodyReader io.Reader
 	if body != "" {
 		bodyReader = strings.NewReader(body)
@@ -244,7 +239,6 @@ func (r *Runner) executeStep(ctx context.Context, step parser.Step, captures map
 		return false, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Set headers
 	for name, value := range step.Headers {
 		processedValue, err := template.Apply(value, captures)
 		if err != nil {
@@ -253,44 +247,37 @@ func (r *Runner) executeStep(ctx context.Context, step parser.Step, captures map
 		req.Header.Set(name, processedValue)
 	}
 
-	// Debug output for request
 	if r.config.Debug {
 		r.debugRequest(req)
 	}
 
-	// Apply rate limiting before making the request
 	if err := r.rateLimiter.Wait(ctx); err != nil {
 		return false, fmt.Errorf("rate limiting interrupted: %w", err)
 	}
 
 	client := r.getClient(step.Options)
 
-	// Execute request
 	resp, err := client.Do(req)
 	if err != nil {
 		return true, fmt.Errorf("request failed: %w", err) // Request was attempted, so count it
 	}
 	defer resp.Body.Close()
 
-	// Read response body
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return true, fmt.Errorf("failed to read response body: %w", err) // Request was made, so count it
+		return true, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	// Debug output for response
 	if r.config.Debug {
 		r.debugResponse(resp, respBody)
 	}
 
-	// Execute assertions
 	if err := r.executeAssertions(step.Asserts, resp, respBody); err != nil {
-		return true, fmt.Errorf("assertion failed: %w", err) // Request was made, so count it
+		return true, fmt.Errorf("assertion failed: %w", err)
 	}
 
-	// Execute captures
 	if err := r.executeCaptures(step.Captures, resp, respBody, captures); err != nil {
-		return true, fmt.Errorf("capture failed: %w", err) // Request was made, so count it
+		return true, fmt.Errorf("capture failed: %w", err)
 	}
 
 	return true, nil
@@ -315,7 +302,6 @@ func (r *Runner) debugRequest(req *http.Request) {
 	fmt.Println("REQUEST:")
 	fmt.Println("========================================")
 
-	// Dump the request
 	reqDump, err := httputil.DumpRequestOut(req, true)
 	if err != nil {
 		fmt.Printf("Error dumping request: %v\n", err)
@@ -332,10 +318,8 @@ func (r *Runner) debugResponse(resp *http.Response, body []byte) {
 	fmt.Println("RESPONSE:")
 	fmt.Println("========================================")
 
-	// Reconstruct the response body so httputil.DumpResponse can read it
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 
-	// Dump the response using httputil for consistency with request dumping
 	respDump, err := httputil.DumpResponse(resp, true)
 	if err != nil {
 		fmt.Printf("Error dumping response: %v\n", err)
@@ -532,7 +516,7 @@ func (r *Runner) executeJSONPathCaptures(captures []parser.JSONPathCapture, body
 				return fmt.Errorf("capture JSONPath result error for %s: %w", capture.Path, err)
 			}
 			value = result.Value
-			break // Take the first result
+			break
 		}
 
 		captureMap[capture.Name] = value
@@ -567,7 +551,6 @@ func (r *Runner) executeRegexCapture(capture parser.RegexCapture, body []byte, c
 
 	matches := re.FindSubmatch(body)
 	if matches == nil {
-		// No match found, store nil or empty string
 		captureMap[capture.Name] = nil
 		return nil
 	}
