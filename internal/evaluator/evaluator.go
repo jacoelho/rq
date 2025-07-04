@@ -97,15 +97,6 @@ func IsValidOperation(operation string) bool {
 }
 
 // EvaluatePredicate evaluates the given predicate against the provided input value.
-// It returns true if the predicate matches, false otherwise, or an error if evaluation fails.
-//
-// Supported predicate operations:
-//   - equals: exact equality comparison
-//   - not_equals: inequality comparison
-//   - regex: regular expression pattern matching
-//   - contains: substring containment check
-//   - exists: existence/nil check
-//   - length: length comparison for arrays, slices, maps, and strings
 func EvaluatePredicate(pred *predicate, input any) (bool, error) {
 	switch pred.Operation {
 	case opEquals:
@@ -131,7 +122,6 @@ func evaluateRegex(patternValue, input any) (bool, error) {
 		return false, fmt.Errorf("regex predicate expects string pattern, got %T", patternValue)
 	}
 
-	// Convert input to string for regex matching
 	inputStr := convertToString(input)
 
 	re, err := regexp.Compile(pattern)

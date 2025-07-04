@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -284,9 +285,29 @@ func (r *Runner) executeStep(ctx context.Context, step parser.Step, captures map
 
 // executeStepAttempt executes a single attempt of an HTTP request step.
 func (r *Runner) executeStepAttempt(ctx context.Context, step parser.Step, captures map[string]any) (bool, error) {
-	url, err := template.Apply(step.URL, captures)
+	requestURL, err := template.Apply(step.URL, captures)
 	if err != nil {
 		return false, fmt.Errorf("failed to process URL template: %w", err)
+	}
+
+	if len(step.Query) > 0 {
+		parsedURL, err := url.Parse(requestURL)
+		if err != nil {
+			return false, fmt.Errorf("failed to parse URL: %w", err)
+		}
+
+		queryParams := parsedURL.Query()
+
+		for name, value := range step.Query {
+			processedValue, err := template.Apply(value, captures)
+			if err != nil {
+				return false, fmt.Errorf("failed to process query parameter %s: %w", name, err)
+			}
+			queryParams.Set(name, processedValue)
+		}
+
+		parsedURL.RawQuery = queryParams.Encode()
+		requestURL = parsedURL.String()
 	}
 
 	body, err := template.Apply(step.Body, captures)
@@ -299,7 +320,7 @@ func (r *Runner) executeStepAttempt(ctx context.Context, step parser.Step, captu
 		bodyReader = strings.NewReader(body)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, step.Method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, step.Method, requestURL, bodyReader)
 	if err != nil {
 		return false, fmt.Errorf("failed to create request: %w", err)
 	}

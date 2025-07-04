@@ -17,10 +17,10 @@ var ErrParser = fmt.Errorf("parser error")
 // Step represents a single HTTP workflow step, including request, assertions, and captures.
 // Each step defines an HTTP operation with optional validation and data extraction.
 type Step struct {
-	Index    int               `yaml:"-"`                  // Step index (assigned during parsing)
 	Method   string            `yaml:"method"`             // HTTP method (GET, POST, etc.)
 	URL      string            `yaml:"url"`                // Request URL
 	Headers  map[string]string `yaml:"headers,omitempty"`  // HTTP headers
+	Query    map[string]string `yaml:"query,omitempty"`    // Query parameters
 	Options  Options           `yaml:"options,omitempty"`  // Request options
 	Body     string            `yaml:"body,omitempty"`     // Request body
 	Asserts  Asserts           `yaml:"asserts,omitempty"`  // Response assertions
@@ -182,12 +182,10 @@ func unmarshalAssertWithField(node ast.Node, fieldName string, fieldValue *strin
 		}
 	}
 
-	// Validate required field for HeaderAssert only
 	if typeName == "HeaderAssert" && *fieldValue == "" {
 		return fmt.Errorf("%w: %s: missing required '%s' field", ErrParser, typeName, fieldName)
 	}
 
-	// Validate required field for CertificateAssert
 	if typeName == "CertificateAssert" && *fieldValue == "" {
 		return fmt.Errorf("%w: %s: missing required '%s' field", ErrParser, typeName, fieldName)
 	}
@@ -195,19 +193,13 @@ func unmarshalAssertWithField(node ast.Node, fieldName string, fieldValue *strin
 	return nil
 }
 
-// Parse decodes a YAML stream of steps, assigning step indices and returning all parsed steps.
-// It validates that the YAML contains a sequence of steps and handles parsing errors consistently.
+// Parse decodes a YAML stream of steps.
 func Parse(r io.Reader) ([]Step, error) {
 	decoder := yaml.NewDecoder(r)
 	var steps []Step
 
 	if err := decoder.Decode(&steps); err != nil {
 		return nil, fmt.Errorf("%w: failed to decode YAML: %v", ErrParser, err)
-	}
-
-	// Assign step indices
-	for i := range steps {
-		steps[i].Index = i
 	}
 
 	return steps, nil

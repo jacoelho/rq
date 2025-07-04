@@ -920,3 +920,88 @@ func TestValidateStep(t *testing.T) {
 		})
 	}
 }
+
+func TestQueryParameters(t *testing.T) {
+	tests := []struct {
+		name           string
+		step           parser.Step
+		expectedParams map[string]string
+	}{
+		{
+			name: "basic_query_parameters",
+			step: parser.Step{
+				Method: "GET",
+				URL:    "/search",
+				Query: map[string]string{
+					"search": "Install Linux",
+					"order":  "newest",
+				},
+			},
+			expectedParams: map[string]string{
+				"search": "Install Linux",
+				"order":  "newest",
+			},
+		},
+		{
+			name: "query_parameters_with_existing_url_params",
+			step: parser.Step{
+				Method: "GET",
+				URL:    "/search?existing=value",
+				Query: map[string]string{
+					"search": "Install Linux",
+					"order":  "newest",
+				},
+			},
+			expectedParams: map[string]string{
+				"existing": "value",
+				"search":   "Install Linux",
+				"order":    "newest",
+			},
+		},
+		{
+			name: "query_parameters_with_template_variables",
+			step: parser.Step{
+				Method: "GET",
+				URL:    "/search",
+				Query: map[string]string{
+					"search": "{{.search_term}}",
+					"limit":  "{{.limit}}",
+				},
+			},
+			expectedParams: map[string]string{
+				"search": "Install Linux",
+				"limit":  "20",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := NewDefault()
+			captures := map[string]any{
+				"search_term": "Install Linux",
+				"limit":       "20",
+			}
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				for expectedKey, expectedValue := range tt.expectedParams {
+					actualValue := r.URL.Query().Get(expectedKey)
+					if actualValue != expectedValue {
+						t.Errorf("Query parameter %s: expected %q, got %q", expectedKey, expectedValue, actualValue)
+					}
+				}
+
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"status": "ok"}`))
+			}))
+			defer server.Close()
+
+			tt.step.URL = server.URL + tt.step.URL
+
+			_, err := runner.executeStepAttempt(context.Background(), tt.step, captures)
+			if err != nil {
+				t.Errorf("executeStepAttempt failed: %v", err)
+			}
+		})
+	}
+}
