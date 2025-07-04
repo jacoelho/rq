@@ -1,0 +1,115 @@
+# Basic query parameters
+- method: GET
+  url: https://httpbin.org/get
+  query:
+    search: Install Linux
+    order: newest
+    limit: 10
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.args.search
+        op: equals
+        value: "Install Linux"
+      - path: $.args.order
+        op: equals
+        value: "newest"
+      - path: $.args.limit
+        op: equals
+        value: "10"
+  captures:
+    jsonpath:
+      - name: captured_search
+        path: $.args.search
+
+# Query parameters with template variables (using captured values from previous step)
+- method: GET
+  url: https://httpbin.org/get
+  query:
+    user_id: "{{uuidv4}}"
+    timestamp: "{{timestamp}}"
+    search: "{{.captured_search}}"
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.args.user_id
+        op: exists
+      - path: $.args.timestamp
+        op: exists
+      - path: $.args.search
+        op: equals
+        value: "Install Linux"
+  captures:
+    jsonpath:
+      - name: captured_user_id
+        path: $.args.user_id
+      - name: captured_timestamp
+        path: $.args.timestamp
+
+# Query parameters with existing URL parameters
+- method: GET
+  url: https://httpbin.org/get?existing=value&fixed=param
+  query:
+    search: Install Linux
+    order: newest
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.args.existing
+        op: equals
+        value: "value"
+      - path: $.args.fixed
+        op: equals
+        value: "param"
+      - path: $.args.search
+        op: equals
+        value: "Install Linux"
+      - path: $.args.order
+        op: equals
+        value: "newest"
+  captures:
+    jsonpath:
+      - name: captured_existing
+        path: $.args.existing
+      - name: captured_fixed
+        path: $.args.fixed
+
+# POST request with query parameters
+- method: POST
+  url: https://httpbin.org/post
+  query:
+    action: create
+    version: v1
+  headers:
+    Content-Type: application/json
+  body: |
+    {
+      "name": "test item",
+      "description": "test description"
+    }
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.args.action
+        op: equals
+        value: "create"
+      - path: $.args.version
+        op: equals
+        value: "v1"
+      - path: $.json.name
+        op: equals
+        value: "test item"
+  captures:
+    jsonpath:
+      - name: captured_action
+        path: $.args.action
+      - name: captured_version
+        path: $.args.version 

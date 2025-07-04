@@ -90,6 +90,46 @@ All standard HTTP methods are supported:
   url: https://httpbin.org/delete
 ```
 
+## Query Parameters
+
+Add query parameters to requests:
+
+```yaml
+- method: GET
+  url: https://httpbin.org/get
+  query:
+    search: Install Linux
+    order: newest
+    limit: 10
+  asserts:
+    jsonpath:
+      - path: $.args.search
+        op: equals
+        value: "Install Linux"
+```
+
+Query parameters support template variables:
+
+```yaml
+- method: GET
+  url: https://httpbin.org/get
+  query:
+    user_id: "{{uuidv4}}"
+    timestamp: "{{timestamp}}"
+    search: "{{.search_term}}"
+```
+
+Query parameters are appended to existing URL parameters:
+
+```yaml
+- method: GET
+  url: https://httpbin.org/get?existing=value&fixed=param
+  query:
+    search: Install Linux
+    order: newest
+  # Results in: https://httpbin.org/get?existing=value&fixed=param&search=Install+Linux&order=newest
+```
+
 ## Assertions
 
 ### Status Code Assertions

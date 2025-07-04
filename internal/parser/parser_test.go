@@ -312,6 +312,64 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
+			name: "query_parameters",
+			yaml: `
+- method: GET
+  url: https://api.example.com/search
+  query:
+    search: Install Linux
+    order: newest
+    limit: 10
+  asserts:
+    status:
+      - op: equals
+        value: 200
+`,
+			check: func(t *testing.T, steps []Step) {
+				assertSingleStep(t, steps, "GET", "https://api.example.com/search")
+				s := steps[0]
+				if len(s.Query) != 3 {
+					t.Errorf("Expected 3 query parameters, got %d", len(s.Query))
+				}
+				if s.Query["search"] != "Install Linux" {
+					t.Errorf("Query[search] = %q, want 'Install Linux'", s.Query["search"])
+				}
+				if s.Query["order"] != "newest" {
+					t.Errorf("Query[order] = %q, want 'newest'", s.Query["order"])
+				}
+				if s.Query["limit"] != "10" {
+					t.Errorf("Query[limit] = %q, want '10'", s.Query["limit"])
+				}
+			},
+		},
+		{
+			name: "query_parameters_with_existing_url_params",
+			yaml: `
+- method: GET
+  url: https://api.example.com/search?existing=value
+  query:
+    search: Install Linux
+    order: newest
+  asserts:
+    status:
+      - op: equals
+        value: 200
+`,
+			check: func(t *testing.T, steps []Step) {
+				assertSingleStep(t, steps, "GET", "https://api.example.com/search?existing=value")
+				s := steps[0]
+				if len(s.Query) != 2 {
+					t.Errorf("Expected 2 query parameters, got %d", len(s.Query))
+				}
+				if s.Query["search"] != "Install Linux" {
+					t.Errorf("Query[search] = %q, want 'Install Linux'", s.Query["search"])
+				}
+				if s.Query["order"] != "newest" {
+					t.Errorf("Query[order] = %q, want 'newest'", s.Query["order"])
+				}
+			},
+		},
+		{
 			name: "missing_method",
 			yaml: `
 - url: https://api.example.com/health

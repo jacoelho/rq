@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -284,9 +285,16 @@ func (r *Runner) executeStep(ctx context.Context, step parser.Step, captures map
 
 // executeStepAttempt executes a single attempt of an HTTP request step.
 func (r *Runner) executeStepAttempt(ctx context.Context, step parser.Step, captures map[string]any) (bool, error) {
-	url, err := template.Apply(step.URL, captures)
+	requestURL, err := template.Apply(step.URL, captures)
 	if err != nil {
 		return false, fmt.Errorf("failed to process URL template: %w", err)
+	}
+
+	if len(step.Query) > 0 {
+		requestURL, err = processQueryParameters(requestURL, step.Query, captures)
+		if err != nil {
+			return false, fmt.Errorf("failed to process query parameters: %w", err)
+		}
 	}
 
 	body, err := template.Apply(step.Body, captures)
@@ -299,7 +307,7 @@ func (r *Runner) executeStepAttempt(ctx context.Context, step parser.Step, captu
 		bodyReader = strings.NewReader(body)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, step.Method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, step.Method, requestURL, bodyReader)
 	if err != nil {
 		return false, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -668,4 +676,29 @@ func (r *Runner) extractCertificateField(field string, resp *http.Response) (any
 	default:
 		return nil, fmt.Errorf("unsupported certificate field: %s (supported: subject, issuer, expire_date, serial_number)", field)
 	}
+}
+
+// processQueryParameters processes query parameters from a step and appends them to the given URL.
+func processQueryParameters(requestURL string, queryParams map[string]string, captures map[string]any) (string, error) {
+	if len(queryParams) == 0 {
+		return requestURL, nil
+	}
+
+	parsedURL, err := url.Parse(requestURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse URL: %w", err)
+	}
+
+	query := parsedURL.Query()
+
+	for name, value := range queryParams {
+		processedValue, err := template.Apply(value, captures)
+		if err != nil {
+			return "", fmt.Errorf("failed to process query parameter %s: %w", name, err)
+		}
+		query.Set(name, processedValue)
+	}
+
+	parsedURL.RawQuery = query.Encode()
+	return parsedURL.String(), nil
 }
