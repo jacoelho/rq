@@ -64,7 +64,7 @@ func NewDefault() *Runner {
 			Timeout: 30 * time.Second,
 		},
 		variables:   make(map[string]any),
-		rateLimiter: ratelimit.New(0), // No rate limiting by default
+		rateLimiter: ratelimit.New(0),
 	}
 }
 
@@ -324,7 +324,7 @@ func (r *Runner) executeStepAttempt(ctx context.Context, step parser.Step, captu
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return true, fmt.Errorf("request failed: %w", err) // Request was attempted, so count it
+		return true, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -483,7 +483,6 @@ func (r *Runner) executeJSONPathAssertions(asserts []parser.JSONPathAssert, body
 
 // executeJSONPathAssertion executes a single JSONPath assertion.
 func (r *Runner) executeJSONPathAssertion(assert parser.JSONPathAssert, body []byte) error {
-	// Use the new evaluator JSONPath integration
 	result, err := evaluator.EvaluateJSONPathParserPredicate(body, assert.Path, &parser.Predicate{
 		Operation: assert.Predicate.Operation,
 		Value:     assert.Predicate.Value,
@@ -579,7 +578,7 @@ func (r *Runner) executeJSONPathCaptures(captures []parser.JSONPathCapture, body
 
 		var value any
 		if len(results) > 0 {
-			value = results[0] // Take the first result
+			value = results[0]
 		}
 
 		captureMap[capture.Name] = value
@@ -618,12 +617,10 @@ func (r *Runner) executeRegexCapture(capture parser.RegexCapture, body []byte, c
 		return nil
 	}
 
-	// Validate group index
 	if capture.Group < 0 || capture.Group >= len(matches) {
 		return fmt.Errorf("invalid capture group %d for pattern %s (found %d groups)", capture.Group, capture.Pattern, len(matches)-1)
 	}
 
-	// Store the matched group (0 = full match, 1+ = capture groups)
 	captureMap[capture.Name] = string(matches[capture.Group])
 	return nil
 }
@@ -657,7 +654,7 @@ func (r *Runner) extractCertificateField(field string, resp *http.Response) (any
 		return nil, fmt.Errorf("no TLS certificate available")
 	}
 
-	cert := resp.TLS.PeerCertificates[0] // Use the first certificate (server certificate)
+	cert := resp.TLS.PeerCertificates[0]
 
 	switch field {
 	case "subject":

@@ -222,26 +222,22 @@ func EvaluateParserPredicate(pred *parser.Predicate, input any) (bool, error) {
 // EvaluateJSONPathPredicate evaluates a predicate against JSON data using a JSONPath expression.
 // This is a convenience function that combines JSONPath evaluation with predicate checking.
 func EvaluateJSONPathPredicate(jsonData []byte, jsonPathExpr string, pred *predicate) (bool, error) {
-	// Parse and validate the JSONPath expression
 	path, err := jsonpath.Parse(jsonPathExpr)
 	if err != nil {
 		return false, fmt.Errorf("invalid JSONPath expression %q: %w", jsonPathExpr, err)
 	}
 
-	// Unmarshal JSON data
 	var data any
 	if err := json.Unmarshal(jsonData, &data); err != nil {
 		return false, fmt.Errorf("failed to parse JSON data: %w", err)
 	}
 
-	// Execute JSONPath query
 	results := path.Select(data)
 
-	// Check each result against the predicate
 	for _, value := range results {
 		match, evalErr := EvaluatePredicate(pred, value)
 		if evalErr != nil {
-			continue // Skip values that can't be evaluated
+			continue
 		}
 		if match {
 			return true, nil

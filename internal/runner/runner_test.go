@@ -1,5 +1,3 @@
-// Package runner provides HTTP request execution functionality for the rq tool.
-// It handles request execution, retries, captures, and assertions.
 package runner
 
 import (
