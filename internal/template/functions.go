@@ -117,7 +117,7 @@ func base64Encode(s string) string {
 // NewTemplate creates a new template with custom functions.
 // This is a convenience function that creates a template with all custom functions pre-loaded.
 func NewTemplate(name string) *template.Template {
-	return template.New(name).Funcs(FuncMap())
+	return template.New(name).Option("missingkey=error").Funcs(FuncMap())
 }
 
 // MustParse creates a new template with custom functions and parses the given text.

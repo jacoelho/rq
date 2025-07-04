@@ -407,3 +407,51 @@ func TestBase64Padding(t *testing.T) {
 		})
 	}
 }
+
+func TestMissingVariableError(t *testing.T) {
+	tests := []struct {
+		name     string
+		template string
+		data     map[string]any
+		wantErr  bool
+	}{
+		{
+			name:     "missing variable should error",
+			template: "Hello {{.nonexistent}}",
+			data:     map[string]any{},
+			wantErr:  true,
+		},
+		{
+			name:     "existing variable should work",
+			template: "Hello {{.name}}",
+			data:     map[string]any{"name": "World"},
+			wantErr:  false,
+		},
+		{
+			name:     "nested missing variable should error",
+			template: "Hello {{.user.name}}",
+			data:     map[string]any{"user": map[string]any{}},
+			wantErr:  true,
+		},
+		{
+			name:     "nested existing variable should work",
+			template: "Hello {{.user.name}}",
+			data:     map[string]any{"user": map[string]any{"name": "World"}},
+			wantErr:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Apply(tt.template, tt.data)
+
+			if tt.wantErr && err == nil {
+				t.Errorf("Apply() expected error for missing variable, got nil")
+			}
+
+			if !tt.wantErr && err != nil {
+				t.Errorf("Apply() unexpected error: %v", err)
+			}
+		})
+	}
+}
