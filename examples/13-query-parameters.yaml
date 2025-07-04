@@ -19,13 +19,18 @@
       - path: $.args.limit
         op: equals
         value: "10"
+  captures:
+    jsonpath:
+      - name: captured_search
+        path: $.args.search
 
-# Query parameters with template variables
+# Query parameters with template variables (using captured values from previous step)
 - method: GET
   url: https://httpbin.org/get
   query:
     user_id: "{{uuidv4}}"
     timestamp: "{{timestamp}}"
+    search: "{{.captured_search}}"
   asserts:
     status:
       - op: equals
@@ -35,6 +40,15 @@
         op: exists
       - path: $.args.timestamp
         op: exists
+      - path: $.args.search
+        op: equals
+        value: "Install Linux"
+  captures:
+    jsonpath:
+      - name: captured_user_id
+        path: $.args.user_id
+      - name: captured_timestamp
+        path: $.args.timestamp
 
 # Query parameters with existing URL parameters
 - method: GET
@@ -59,6 +73,12 @@
       - path: $.args.order
         op: equals
         value: "newest"
+  captures:
+    jsonpath:
+      - name: captured_existing
+        path: $.args.existing
+      - name: captured_fixed
+        path: $.args.fixed
 
 # POST request with query parameters
 - method: POST
@@ -86,4 +106,10 @@
         value: "v1"
       - path: $.json.name
         op: equals
-        value: "test item" 
+        value: "test item"
+  captures:
+    jsonpath:
+      - name: captured_action
+        path: $.args.action
+      - name: captured_version
+        path: $.args.version 
