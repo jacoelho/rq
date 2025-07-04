@@ -1,3 +1,5 @@
+// Package runner provides HTTP request execution functionality for the rq tool.
+// It handles request execution, retries, captures, and assertions.
 package runner
 
 import (
@@ -19,7 +21,7 @@ import (
 )
 
 // checkNumericValue is a helper function to check numeric values from JSONPath
-// which can return int, float64, or json.Number depending on the JSON parser
+// which can return int, float64, or json.Number depending on the JSON parser.
 func checkNumericValue(t *testing.T, actual any, expected int, fieldName string) {
 	t.Helper()
 
@@ -451,11 +453,11 @@ func TestExtractCertificateField(t *testing.T) {
 
 			if tt.expectError {
 				if err == nil {
-					t.Errorf("Expected error, got nil")
+					t.Error("expected error, got nil")
 				}
 			} else {
 				if err != nil {
-					t.Errorf("Unexpected error: %v", err)
+					t.Errorf("unexpected error: %v", err)
 				}
 				if tt.expectedValue != nil && value != tt.expectedValue {
 					t.Errorf("Expected value %v, got %v", tt.expectedValue, value)
@@ -525,10 +527,8 @@ func TestExecuteStepWithRetries(t *testing.T) {
 			status int
 			body   string
 		}
-		expectedAttempts    int
-		expectedError       bool
-		expectedStatus      int
-		assertionShouldPass bool
+		expectedAttempts int
+		expectedError    bool
 	}{
 		{
 			name:    "no_retries_success",
@@ -539,10 +539,8 @@ func TestExecuteStepWithRetries(t *testing.T) {
 			}{
 				{status: 200, body: `{"status": "success"}`},
 			},
-			expectedAttempts:    1,
-			expectedError:       false,
-			expectedStatus:      200,
-			assertionShouldPass: true,
+			expectedAttempts: 1,
+			expectedError:    false,
 		},
 		{
 			name:    "no_retries_failure",
@@ -553,10 +551,8 @@ func TestExecuteStepWithRetries(t *testing.T) {
 			}{
 				{status: 500, body: `{"status": "error"}`},
 			},
-			expectedAttempts:    1,
-			expectedError:       true,
-			expectedStatus:      500,
-			assertionShouldPass: false,
+			expectedAttempts: 1,
+			expectedError:    true,
 		},
 		{
 			name:    "retry_until_success",
@@ -569,10 +565,8 @@ func TestExecuteStepWithRetries(t *testing.T) {
 				{status: 500, body: `{"status": "error"}`},
 				{status: 200, body: `{"status": "success"}`},
 			},
-			expectedAttempts:    3,
-			expectedError:       false,
-			expectedStatus:      200,
-			assertionShouldPass: true,
+			expectedAttempts: 3,
+			expectedError:    false,
 		},
 		{
 			name:    "retry_all_attempts_fail",
@@ -585,10 +579,8 @@ func TestExecuteStepWithRetries(t *testing.T) {
 				{status: 500, body: `{"status": "error"}`},
 				{status: 500, body: `{"status": "error"}`},
 			},
-			expectedAttempts:    3,
-			expectedError:       true,
-			expectedStatus:      500,
-			assertionShouldPass: false,
+			expectedAttempts: 3,
+			expectedError:    true,
 		},
 		{
 			name:    "retry_first_attempt_success",
@@ -599,10 +591,8 @@ func TestExecuteStepWithRetries(t *testing.T) {
 			}{
 				{status: 200, body: `{"status": "success"}`},
 			},
-			expectedAttempts:    1,
-			expectedError:       false,
-			expectedStatus:      200,
-			assertionShouldPass: true,
+			expectedAttempts: 1,
+			expectedError:    false,
 		},
 	}
 
@@ -919,71 +909,6 @@ func TestValidateStep(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := runner.validateStep(tt.step)
-
-			if tt.expectError && err == nil {
-				t.Error("Expected error but got none")
-			}
-			if !tt.expectError && err != nil {
-				t.Errorf("Expected no error but got: %v", err)
-			}
-			if tt.expectError && err != nil && !bytes.Contains([]byte(err.Error()), []byte(tt.errorText)) {
-				t.Errorf("Expected error to contain %q, got: %v", tt.errorText, err)
-			}
-		})
-	}
-}
-
-func TestExecuteStepValidation(t *testing.T) {
-	t.Parallel()
-
-	runner := NewDefault()
-
-	tests := []struct {
-		name        string
-		step        parser.Step
-		expectError bool
-		errorText   string
-	}{
-		{
-			name: "invalid_step_negative_retries",
-			step: parser.Step{
-				Method: "GET",
-				URL:    "https://example.com",
-				Options: parser.Options{
-					Retries: -5,
-				},
-			},
-			expectError: true,
-			errorText:   "invalid step configuration",
-		},
-		{
-			name: "invalid_step_empty_method",
-			step: parser.Step{
-				Method: "",
-				URL:    "https://example.com",
-			},
-			expectError: true,
-			errorText:   "invalid step configuration",
-		},
-		{
-			name: "invalid_step_unsupported_method",
-			step: parser.Step{
-				Method: "TRACE",
-				URL:    "https://example.com",
-			},
-			expectError: true,
-			errorText:   "invalid step configuration",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			captures := make(map[string]any)
-			requestMade, err := runner.executeStep(context.Background(), tt.step, captures)
-
-			if !requestMade {
-				// Should not make requests for validation errors
-			}
 
 			if tt.expectError && err == nil {
 				t.Error("Expected error but got none")

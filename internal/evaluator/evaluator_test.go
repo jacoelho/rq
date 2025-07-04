@@ -1118,7 +1118,7 @@ func TestJSONPathResponseAssertions(t *testing.T) {
 		// Content-Type header contains check
 		{
 			name:      "content_type_header_contains",
-			jsonPath:  "$.headers.Content-Type",
+			jsonPath:  "$.headers['Content-Type']",
 			predicate: &predicate{Operation: opContains, Value: "application/json"},
 			expected:  true,
 		},
@@ -1134,7 +1134,7 @@ func TestJSONPathResponseAssertions(t *testing.T) {
 		// User-Agent validation
 		{
 			name:      "user_agent_contains_rq",
-			jsonPath:  "$.headers.User-Agent",
+			jsonPath:  "$.headers['User-Agent']",
 			predicate: &predicate{Operation: opContains, Value: "rq"},
 			expected:  true,
 		},

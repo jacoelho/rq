@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
@@ -19,11 +20,11 @@ import (
 	"github.com/jacoelho/rq/internal/exit"
 	"github.com/jacoelho/rq/internal/formatter"
 	"github.com/jacoelho/rq/internal/formatter/stdout"
-	"github.com/jacoelho/rq/internal/jsonpath"
 	"github.com/jacoelho/rq/internal/parser"
 	"github.com/jacoelho/rq/internal/ratelimit"
 	"github.com/jacoelho/rq/internal/results"
 	"github.com/jacoelho/rq/internal/template"
+	"github.com/theory/jsonpath"
 )
 
 // Runner executes HTTP test workflows.
@@ -564,23 +565,21 @@ func (r *Runner) executeCertificateCaptures(captures []parser.CertificateCapture
 // executeJSONPathCaptures processes JSONPath captures.
 func (r *Runner) executeJSONPathCaptures(captures []parser.JSONPathCapture, body []byte, captureMap map[string]any) error {
 	for _, capture := range captures {
-		if err := jsonpath.Validate(capture.Path); err != nil {
+		path, err := jsonpath.Parse(capture.Path)
+		if err != nil {
 			return fmt.Errorf("invalid capture JSONPath %s: %w", capture.Path, err)
 		}
 
-		ctx := context.Background()
-		results, err := jsonpath.Stream(ctx, bytes.NewReader(body), capture.Path)
-		if err != nil {
-			return fmt.Errorf("capture JSONPath execution failed for %s: %w", capture.Path, err)
+		var data any
+		if err := json.Unmarshal(body, &data); err != nil {
+			return fmt.Errorf("failed to parse JSON data for capture %s: %w", capture.Path, err)
 		}
 
+		results := path.Select(data)
+
 		var value any
-		for result, err := range results {
-			if err != nil {
-				return fmt.Errorf("capture JSONPath result error for %s: %w", capture.Path, err)
-			}
-			value = result.Value
-			break
+		if len(results) > 0 {
+			value = results[0] // Take the first result
 		}
 
 		captureMap[capture.Name] = value

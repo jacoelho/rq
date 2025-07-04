@@ -133,6 +133,18 @@ asserts:
       value: "^(active|inactive)$"
 ```
 
+**Note**: For property names containing special characters (like hyphens), use bracket notation:
+```yaml
+asserts:
+  jsonpath:
+    - path: $.headers['Content-Type']
+      op: contains
+      value: "application/json"
+    - path: $.headers['User-Agent']
+      op: contains
+      value: "Mozilla"
+```
+
 ### Assertion Operators
 
 - `equals` - Exact match
@@ -174,6 +186,16 @@ captures:
       path: $.user.id
     - name: session_token
       path: $.auth.token
+```
+
+**Note**: For property names containing special characters (like hyphens), use bracket notation:
+```yaml
+captures:
+  jsonpath:
+    - name: content_type
+      path: $.headers['Content-Type']
+    - name: user_agent
+      path: $.headers['User-Agent']
 ```
 
 ### Regex Capture
