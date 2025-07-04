@@ -367,7 +367,7 @@ func TestRunnerEndToEndWithRepeat(t *testing.T) {
 		requestCount++
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(fmt.Sprintf(`{"iteration": %d}`, requestCount)))
+		w.Write(fmt.Appendf(nil, `{"iteration": %d}`, requestCount))
 	}))
 	defer server.Close()
 

@@ -1,8 +1,6 @@
 package evaluator
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -10,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jacoelho/rq/internal/jsonpath"
 	"github.com/jacoelho/rq/internal/parser"
+	"github.com/theory/jsonpath"
 )
 
 // Operation constants for predicate evaluation.
@@ -224,24 +222,22 @@ func EvaluateParserPredicate(pred *parser.Predicate, input any) (bool, error) {
 // EvaluateJSONPathPredicate evaluates a predicate against JSON data using a JSONPath expression.
 // This is a convenience function that combines JSONPath evaluation with predicate checking.
 func EvaluateJSONPathPredicate(jsonData []byte, jsonPathExpr string, pred *predicate) (bool, error) {
-	if err := jsonpath.Validate(jsonPathExpr); err != nil {
+	path, err := jsonpath.Parse(jsonPathExpr)
+	if err != nil {
 		return false, fmt.Errorf("invalid JSONPath expression %q: %w", jsonPathExpr, err)
 	}
 
-	ctx := context.Background()
-	results, err := jsonpath.Stream(ctx, bytes.NewReader(jsonData), jsonPathExpr)
-	if err != nil {
-		return false, fmt.Errorf("JSONPath execution failed for %q: %w", jsonPathExpr, err)
+	var data any
+	if err := json.Unmarshal(jsonData, &data); err != nil {
+		return false, fmt.Errorf("failed to parse JSON data: %w", err)
 	}
 
-	for result, err := range results {
-		if err != nil {
-			return false, fmt.Errorf("JSONPath result error for %q: %w", jsonPathExpr, err)
-		}
+	results := path.Select(data)
 
-		match, evalErr := EvaluatePredicate(pred, result.Value)
+	for _, value := range results {
+		match, evalErr := EvaluatePredicate(pred, value)
 		if evalErr != nil {
-			continue // Skip values that can't be evaluated
+			continue
 		}
 		if match {
 			return true, nil
@@ -265,7 +261,7 @@ func EvaluateJSONPathParserPredicate(jsonData []byte, jsonPathExpr string, pred 
 // ValidateJSONPathPredicate validates both a JSONPath expression and a predicate.
 // This is useful for upfront validation before execution.
 func ValidateJSONPathPredicate(jsonPathExpr string, pred *predicate) error {
-	if err := jsonpath.Validate(jsonPathExpr); err != nil {
+	if _, err := jsonpath.Parse(jsonPathExpr); err != nil {
 		return fmt.Errorf("invalid JSONPath expression %q: %w", jsonPathExpr, err)
 	}
 
@@ -289,7 +285,7 @@ func NewJSONPathAssertion(path string, operation string, value any) (*jsonPathAs
 		return nil, fmt.Errorf("invalid predicate: %w", err)
 	}
 
-	if err := jsonpath.Validate(path); err != nil {
+	if _, err := jsonpath.Parse(path); err != nil {
 		return nil, fmt.Errorf("invalid JSONPath expression %q: %w", path, err)
 	}
 

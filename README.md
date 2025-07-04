@@ -133,6 +133,18 @@ asserts:
       value: "^(active|inactive)$"
 ```
 
+**Note**: For property names containing special characters (like hyphens), use bracket notation:
+```yaml
+asserts:
+  jsonpath:
+    - path: $.headers['Content-Type']
+      op: contains
+      value: "application/json"
+    - path: $.headers['User-Agent']
+      op: contains
+      value: "Mozilla"
+```
+
 ### Assertion Operators
 
 - `equals` - Exact match
@@ -174,6 +186,16 @@ captures:
       path: $.user.id
     - name: session_token
       path: $.auth.token
+```
+
+**Note**: For property names containing special characters (like hyphens), use bracket notation:
+```yaml
+captures:
+  jsonpath:
+    - name: content_type
+      path: $.headers['Content-Type']
+    - name: user_agent
+      path: $.headers['User-Agent']
 ```
 
 ### Regex Capture
@@ -337,25 +359,12 @@ Chain multiple requests together:
 
 ## Examples
 
-The `examples/` directory contains comprehensive examples:
-
-- `01-basic-get.yaml` - Simple GET request
-- `02-post-with-json.yaml` - POST with JSON body
-- `03-headers-and-auth.yaml` - Custom headers and authentication
-- `04-captures-and-variables.yaml` - Data capture and variable usage
-- `05-template-functions.yaml` - Built-in template functions
-- `06-status-codes.yaml` - Testing different status codes
-- `07-response-capture.yaml` - Response data capture
-- `08-regex-capture.yaml` - Regular expression extraction
-- `09-advanced-assertions.yaml` - Advanced assertion types
-- `10-retries-and-options.yaml` - Retry behavior and options
-- `11-form-data.yaml` - Form data submission
-- `12-complex-workflow.yaml` - Multi-step workflow
+The `examples/` directory contains comprehensive examples.
 
 Run all examples:
 
 ```bash
-rq examples/*.yaml
+make examples
 ```
 
 ## Debug Mode

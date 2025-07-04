@@ -1,0 +1,36 @@
+name: pr-checks
+
+on:
+  pull_request:
+    branches: [ main, master ]
+  push:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    name: Run Tests and Examples
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version-file: 'go.mod'
+        
+    - name: Install staticcheck
+      run: go install honnef.co/go/tools/cmd/staticcheck@latest
+      
+    - name: Run tests
+      run: make test
+      
+    - name: Run staticcheck
+      run: make staticcheck
+      
+    - name: Run examples
+      run: make examples
+      
+    - name: Clean up
+      run: make clean 

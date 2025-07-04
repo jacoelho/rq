@@ -13,10 +13,10 @@
         op: contains
         value: "application/json"
     jsonpath:
-      - path: $.headers.User-Agent
+      - path: $.headers['User-Agent']
         op: equals
         value: "rq-tool/1.0"
-      - path: $.headers.X-Custom-Header
+      - path: $.headers['X-Custom-Header']
         op: equals
         value: "test-value"
       - path: $.headers.Authorization
