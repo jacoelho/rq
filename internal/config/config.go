@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -331,10 +332,29 @@ func (c *Config) HTTPClient() (*http.Client, error) {
 		return nil, fmt.Errorf("failed to create TLS configuration: %w", err)
 	}
 
-	return &http.Client{
-		Timeout: c.RequestTimeout,
-		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
-		},
-	}, nil
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+
+	transport := &http.Transport{
+		Proxy:                  http.ProxyFromEnvironment,
+		DialContext:            dialer.DialContext,
+		TLSClientConfig:        tlsConfig,
+		TLSHandshakeTimeout:    10 * time.Second,
+		ResponseHeaderTimeout:  10 * time.Second,
+		ExpectContinueTimeout:  1 * time.Second,
+		IdleConnTimeout:        60 * time.Second,
+		MaxIdleConns:           100,
+		MaxIdleConnsPerHost:    10,
+		MaxConnsPerHost:        50,
+		MaxResponseHeaderBytes: 1 << 20, // 1 MiB
+	}
+
+	client := &http.Client{
+		Timeout:   c.RequestTimeout,
+		Transport: transport,
+	}
+
+	return client, nil
 }
