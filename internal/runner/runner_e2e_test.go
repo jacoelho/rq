@@ -548,7 +548,6 @@ func TestRunnerEndToEndErrorHandling(t *testing.T) {
 }
 
 func TestRunnerSecretRedaction(t *testing.T) {
-	// Set up a test server that checks the real secrets are sent in the request
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		apiKey := r.Header.Get("X-API-Key")
@@ -624,7 +623,6 @@ func TestRunnerSecretRedaction(t *testing.T) {
 
 	output := outputBuf.String()
 
-	// Verify that actual secrets are NOT in the debug output
 	secrets := map[string]string{
 		"api_key":  "api_key_secret",
 		"token":    "access_token_secret",
@@ -636,10 +634,7 @@ func TestRunnerSecretRedaction(t *testing.T) {
 		}
 	}
 
-	// Verify that redacted secrets (hash format) ARE in the debug output
 	if !strings.Contains(output, "[S256:") {
 		t.Errorf("Debug output should contain redacted secrets in [S256:xxxx] format, but it doesn't")
 	}
-
-	t.Logf("Debug output for secret redaction test:\n%s", output)
 }
