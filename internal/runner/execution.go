@@ -79,7 +79,6 @@ func (r *Runner) executeStep(ctx context.Context, step parser.Step, captures map
 
 // executeStepAttempt executes a single attempt of an HTTP request step.
 func (r *Runner) executeStepAttempt(ctx context.Context, step parser.Step, captures map[string]CaptureValue) (bool, error) {
-	// For template expansion, use only the values
 	tmplVars := captureMapForTemplate(captures)
 
 	requestURL, err := template.Apply(step.URL, tmplVars)
