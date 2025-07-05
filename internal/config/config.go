@@ -22,6 +22,10 @@ const (
 	DefaultTimeout = 30 * time.Second
 )
 
+// timeNow is a function that returns the current time.
+// can be overridden in tests for deterministic behavior.
+var timeNow = time.Now
+
 var (
 	ErrNoArguments           = errors.New("no arguments provided")
 	ErrNoTestFiles           = errors.New("no test files specified")
@@ -193,7 +197,7 @@ func Parse(args []string) (*Config, *exit.Result) {
 		variableFile = fs.String("variable-file", "", "Path to key=value file containing template variables")
 		timeout      = fs.Duration("timeout", DefaultTimeout, "HTTP request timeout")
 		rateLimit    = fs.Float64("rate-limit", 0, "Rate limit in requests per second (0 for unlimited)")
-		secretSalt   = fs.String("secret-salt", time.Now().Format("2006-01-02"), "Salt to use for secret redaction hashes (default: current date)")
+		secretSalt   = fs.String("secret-salt", timeNow().Format("2006-01-02"), "Salt to use for secret redaction hashes (default: current date)")
 	)
 
 	fs.Var(secrets, "secret", "Secret in format name=value (can be used multiple times)")
