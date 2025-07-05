@@ -546,3 +546,100 @@ func TestRunnerEndToEndErrorHandling(t *testing.T) {
 		})
 	}
 }
+
+func TestRunnerSecretRedaction(t *testing.T) {
+	// Set up a test server that checks the real secrets are sent in the request
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		apiKey := r.Header.Get("X-API-Key")
+
+		if authHeader != "Bearer secret123" {
+			t.Errorf("Expected Authorization header to contain actual secret, got: %s", authHeader)
+		}
+		if apiKey != "api_key_secret" {
+			t.Errorf("Expected X-API-Key header to contain actual secret, got: %s", apiKey)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status": "authenticated"}`))
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "test.yaml")
+
+	yamlContent := `- method: POST
+  url: ` + server.URL + `/api/auth
+  headers:
+    Content-Type: application/json
+    Authorization: Bearer secret123
+    X-API-Key: api_key_secret
+  body: |
+    {
+      "username": "testuser",
+      "password": "secret123",
+      "token": "access_token_secret"
+    }
+  asserts:
+    status:
+      - op: equals
+        value: 200`
+
+	if err := os.WriteFile(testFile, []byte(yamlContent), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	cfg := &config.Config{
+		TestFiles: []string{testFile},
+		Debug:     true,
+		Repeat:    0,
+		Secrets: map[string]any{
+			"api_key":  "api_key_secret",
+			"token":    "access_token_secret",
+			"password": "secret123",
+		},
+		SecretSalt: "test-salt-2025-01-15",
+	}
+
+	runner, exitResult := New(cfg)
+	if exitResult != nil {
+		t.Fatalf("Failed to create runner: %s", exitResult.Message)
+	}
+
+	var outputBuf bytes.Buffer
+	runner.formatter = stdout.NewWithWriter(&outputBuf)
+
+	ctx := context.Background()
+	result, err := runner.ExecuteFiles(ctx, cfg.TestFiles)
+
+	if result != nil {
+		if formatErr := runner.formatter.Format(result); formatErr != nil {
+			t.Fatalf("Failed to format results: %v", formatErr)
+		}
+	}
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	output := outputBuf.String()
+
+	// Verify that actual secrets are NOT in the debug output
+	secrets := map[string]string{
+		"api_key":  "api_key_secret",
+		"token":    "access_token_secret",
+		"password": "secret123",
+	}
+	for _, secret := range secrets {
+		if strings.Contains(output, secret) {
+			t.Errorf("Debug output should not contain actual secret %q, but it does", secret)
+		}
+	}
+
+	// Verify that redacted secrets (hash format) ARE in the debug output
+	if !strings.Contains(output, "[S256:") {
+		t.Errorf("Debug output should contain redacted secrets in [S256:xxxx] format, but it doesn't")
+	}
+
+	t.Logf("Debug output for secret redaction test:\n%s", output)
+}

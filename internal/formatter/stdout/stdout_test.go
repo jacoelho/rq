@@ -327,7 +327,47 @@ func TestNew(t *testing.T) {
 func TestNewWithWriter(t *testing.T) {
 	var buf bytes.Buffer
 	formatter := NewWithWriter(&buf)
-	if formatter == nil {
-		t.Error("NewWithWriter() returned nil")
+
+	// Test basic functionality
+	summary := &results.Summary{
+		ExecutedFiles:    1,
+		ExecutedRequests: 1,
+		TotalDuration:    time.Millisecond,
+		FileResults: []results.FileResult{
+			{
+				Filename:     "test.yaml",
+				RequestCount: 1,
+				Duration:     time.Millisecond,
+			},
+		},
+	}
+
+	err := formatter.Format(summary)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+
+	if buf.Len() == 0 {
+		t.Error("Expected output, got empty buffer")
+	}
+}
+
+func TestFormatter_Debug(t *testing.T) {
+	var buf bytes.Buffer
+	formatter := NewWithWriter(&buf)
+
+	description := "TEST DEBUG"
+	data := []byte("This is test debug data\nwith multiple lines")
+
+	err := formatter.Debug(description, data)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+
+	output := buf.String()
+	expected := "========================================\nTEST DEBUG:\n========================================\nThis is test debug data\nwith multiple lines\n"
+
+	if output != expected {
+		t.Errorf("Expected output:\n%s\nGot:\n%s", expected, output)
 	}
 }
