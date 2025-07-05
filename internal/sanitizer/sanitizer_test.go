@@ -126,7 +126,7 @@ func TestRedactSecrets(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := redactBody([]byte(tt.data), tt.redactValues, testSalt)
+			got := redactOutput([]byte(tt.data), tt.redactValues, testSalt)
 			if string(got) != tt.want {
 				t.Errorf("redactSecrets() = %s, want %s", string(got), tt.want)
 			}

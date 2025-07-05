@@ -17,7 +17,7 @@ func DumpRequestRedacted(req *http.Request, redactValues []any, salt string) ([]
 		return nil, fmt.Errorf("failed to dump request: %w", err)
 	}
 
-	return redactBody(dump, redactValues, salt), nil
+	return redactOutput(dump, redactValues, salt), nil
 }
 
 // DumpResponseRedacted dumps an HTTP response with secrets redacted.
@@ -31,11 +31,11 @@ func DumpResponseRedacted(resp *http.Response, body []byte, redactValues []any, 
 		return nil, fmt.Errorf("failed to dump response: %w", err)
 	}
 
-	return redactBody(dump, redactValues, salt), nil
+	return redactOutput(dump, redactValues, salt), nil
 }
 
-// redactBody replaces secret values in the given data with [S256:hash].
-func redactBody(data []byte, redactValues []any, salt string) []byte {
+// redactOutput replaces secret values in the given data with [S256:hash].
+func redactOutput(data []byte, redactValues []any, salt string) []byte {
 	if len(redactValues) == 0 || len(data) == 0 {
 		return data
 	}

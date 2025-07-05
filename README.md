@@ -1,6 +1,6 @@
 # rq
 
-A command-line tool for testing and automating HTTP APIs with YAML.
+A command-line HTTP testing tool for API workflows and automation.
 
 Inspired by [Hurl](https://hurl.dev/).
 
