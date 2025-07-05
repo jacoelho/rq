@@ -2,11 +2,15 @@
 
 A command-line HTTP testing tool for API workflows and automation.
 
-*Inspired by [Hurl](https://hurl.dev/)*
+Inspired by [Hurl](https://hurl.dev/).
 
-## Overview
+---
 
-rq executes HTTP requests defined in YAML files with support for assertions, data capture, and multi-step workflows. It provides a simple way to test APIs, automate HTTP interactions, and validate responses.
+## What is rq?
+
+rq runs HTTP requests defined in YAML files. It supports assertions, data capture, and multi-step workflows. Use it to test APIs, automate HTTP calls, and validate responses.
+
+---
 
 ## Installation
 
@@ -14,13 +18,13 @@ rq executes HTTP requests defined in YAML files with support for assertions, dat
 go install github.com/jacoelho/rq/cmd/rq@latest
 ```
 
+---
 
 ## Quick Start
 
-Create a simple test file:
+Create a test file:
 
 ```yaml
-# test.yaml
 - method: GET
   url: https://httpbin.org/json
   asserts:
@@ -33,355 +37,196 @@ Create a simple test file:
         value: "Sample Slide Show"
 ```
 
-Run the test:
+Run it:
 
 ```bash
 rq test.yaml
 ```
 
-## Basic Usage
+---
 
-### Command Line Options
+## Command Line Usage
 
 ```bash
 rq [options] <file1.yaml> [file2.yaml...]
 ```
 
-#### Flags
+**Common options:**
 
-- `--debug`                 Enable debug output showing request and response details
-- `--secret NAME=VALUE`     Secret in format name=value (can be used multiple times)
-- `--secret-file FILE`      Path to key=value file containing secrets
-- `--secret-salt SALT`      Salt to use for secret redaction hashes (default: current date)
-- `--rate-limit N`          Rate limit in requests per second (0 for unlimited)
-- `--repeat N`              Number of additional times to repeat after first run (negative for infinite)
-- `--insecure`              Skip TLS certificate verification
-- `--cacert FILE`           Path to CA certificate file for TLS verification
-- `--timeout DURATION`      HTTP request timeout (default: 30s)
-- `-h, --help`              Show help message
-- `-v, --version`           Show version information
+| Flag                  | Description                                      |
+|-----------------------|--------------------------------------------------|
+| `--debug`             | Show request/response debug output               |
+| `--secret NAME=VALUE` | Provide secret (can be used multiple times)      |
+| `--secret-file FILE`  | Load secrets from file                           |
+| `--secret-salt SALT`  | Salt for secret redaction hashes                 |
+| `--rate-limit N`      | Requests per second (0 = unlimited)              |
+| `--repeat N`          | Repeat test N times (negative = infinite)        |
+| `--insecure`          | Skip TLS verification                            |
+| `--cacert FILE`       | Custom CA certificate                            |
+| `--timeout DURATION`  | Request timeout (default: 30s)                   |
+| `-h, --help`          | Show help                                        |
+| `-v, --version`       | Show version                                     |
 
-### YAML Structure
+---
+
+## Writing Tests
 
 Each YAML file contains a list of HTTP steps:
 
 ```yaml
-- method: GET|POST|PUT|PATCH|DELETE
+- method: POST
   url: https://example.com/api
   headers:
     Content-Type: application/json
   body: |
     {"key": "value"}
-  options:
-    retries: 3
-    follow_redirect: true
   asserts:
-    # Response validation
+    status:
+      - op: equals
+        value: 200
   captures:
-    # Data extraction
-```
-
-## HTTP Methods
-
-All standard HTTP methods are supported:
-
-```yaml
-- method: GET
-  url: https://httpbin.org/get
-
-- method: POST
-  url: https://httpbin.org/post
-  headers:
-    Content-Type: application/json
-  body: |
-    {"name": "John", "email": "john@example.com"}
-
-- method: PUT
-  url: https://httpbin.org/put
-  body: "Updated content"
-
-- method: DELETE
-  url: https://httpbin.org/delete
-```
-
-## Query Parameters
-
-Add query parameters to requests:
-
-```yaml
-- method: GET
-  url: https://httpbin.org/get
-  query:
-    search: Install Linux
-    order: newest
-    limit: 10
-  asserts:
     jsonpath:
-      - path: $.args.search
-        op: equals
-        value: "Install Linux"
+      - name: token
+        path: $.auth.token
+        redact: true
 ```
 
-Query parameters support template variables:
+---
+
+## Features
+
+### Supported HTTP Methods
 
 ```yaml
-- method: GET
-  url: https://httpbin.org/get
-  query:
-    user_id: "{{uuidv4}}"
-    timestamp: "{{timestamp}}"
-    search: "{{.search_term}}"
+- method: GET|POST|PUT|PATCH|DELETE
+  url: https://httpbin.org/...
 ```
 
-Query parameters are appended to existing URL parameters:
+### Query Parameters
 
 ```yaml
-- method: GET
-  url: https://httpbin.org/get?existing=value&fixed=param
-  query:
-    search: Install Linux
-    order: newest
-  # Results in: https://httpbin.org/get?existing=value&fixed=param&search=Install+Linux&order=newest
+query:
+  search: Install Linux
+  order: newest
+  limit: 10
 ```
 
-## Assertions
+You can use template variables:
 
-### Status Code Assertions
+```yaml
+query:
+  user_id: "{{uuidv4}}"
+  timestamp: "{{timestamp}}"
+```
+
+---
+
+### Assertions
+
+Check status, headers, or JSONPath values:
 
 ```yaml
 asserts:
   status:
     - op: equals
       value: 200
-    - op: not_equals
-      value: 404
-    - op: regex
-      value: "^2[0-9]{2}$"  # 2xx success codes
-```
-
-### Header Assertions
-
-```yaml
-asserts:
   headers:
     - name: Content-Type
       op: contains
       value: "application/json"
-    - name: Server
-      op: exists
-```
-
-### JSONPath Assertions
-
-```yaml
-asserts:
   jsonpath:
     - path: $.user.name
       op: equals
       value: "John Doe"
-    - path: $.items
-      op: length
-      value: 5
-    - path: $.status
-      op: regex
-      value: "^(active|inactive)$"
 ```
 
-**Note**: For property names containing special characters (like hyphens), use bracket notation:
+**Operators:** `equals`, `not_equals`, `contains`, `regex`, `exists`, `length`
+
+---
+
+### Data Capture
+
+Extract data for use in later steps:
+
 ```yaml
-asserts:
+captures:
   jsonpath:
-    - path: $.headers['Content-Type']
-      op: contains
-      value: "application/json"
-    - path: $.headers['User-Agent']
-      op: contains
-      value: "Mozilla"
-```
-
-### Assertion Operators
-
-- `equals` - Exact match
-- `not_equals` - Not equal to
-- `contains` - String contains substring
-- `regex` - Regular expression match
-- `exists` - Value is present
-- `length` - Array/string length
-
-## Data Capture
-
-Extract data from responses for use in subsequent requests:
-
-### Status Capture
-
-```yaml
-captures:
-  status:
-    - name: response_code
-```
-
-### Header Capture
-
-```yaml
-captures:
+    - name: session_token
+      path: $.auth.token
+      redact: true  # Redact in debug output
   headers:
-    - name: auth_token
-      header_name: Authorization
     - name: content_type
       header_name: Content-Type
 ```
 
-### JSONPath Capture
+Other capture types: `status`, `regex`, `certificate`, `body`
+
+---
+
+### Using Captured Data
+
+Use captured values in later requests:
 
 ```yaml
-captures:
-  jsonpath:
-    - name: user_id
-      path: $.user.id
-    - name: session_token
-      path: $.auth.token
+headers:
+  Authorization: "Bearer {{.session_token}}"
 ```
 
-**Note**: For property names containing special characters (like hyphens), use bracket notation:
+---
+
+### Template Functions
+
+Generate dynamic values:
+
+- `uuidv4` — Random UUID
+- `now` — Current time (RFC3339)
+- `timestamp` — Unix timestamp
+- `randomInt min max` — Random integer
+- `randomString length` — Random string
+- `base64 string` — Base64 encode
+
+Example:
+
 ```yaml
-captures:
-  jsonpath:
-    - name: content_type
-      path: $.headers['Content-Type']
-    - name: user_agent
-      path: $.headers['User-Agent']
+body: |
+  {
+    "id": "{{uuidv4}}",
+    "created": "{{now}}"
+  }
 ```
 
-### Regex Capture
+---
 
-```yaml
-captures:
-  regex:
-    - name: version
-      pattern: "version: (\\d+\\.\\d+\\.\\d+)"
-      group: 1
-```
+### Request Options
 
-### Certificate Capture
-
-```yaml
-captures:
-  certificate:
-    - name: cert_subject
-      certificate_field: subject
-    - name: cert_issuer
-      certificate_field: issuer
-    - name: cert_expiry
-      certificate_field: expire_date
-    - name: cert_serial
-      certificate_field: serial_number
-```
-
-### Body Capture
-
-```yaml
-captures:
-  body:
-    - name: full_response
-```
-
-## Template Variables
-
-Use captured data in subsequent requests:
-
-```yaml
-# First request captures data
-- method: POST
-  url: https://httpbin.org/post
-  body: |
-    {"username": "admin"}
-  captures:
-    jsonpath:
-      - name: user_id
-        path: $.json.username
-
-# Second request uses captured data
-- method: GET
-  url: https://httpbin.org/headers
-  headers:
-    X-User-ID: "{{.user_id}}"
-    Authorization: "Bearer {{.auth_token}}"
-```
-
-## Template Functions
-
-Built-in functions for dynamic data generation:
-
-```yaml
-- method: POST
-  url: https://httpbin.org/post
-  body: |
-    {
-      "id": "{{uuidv4}}",
-      "timestamp": "{{timestamp}}",
-      "datetime": "{{now}}",
-      "random": "{{randomString 8}}",
-      "number": {{randomInt 1 100}},
-      "encoded": "{{base64 "hello world"}}"
-    }
-```
-
-Available functions:
-- `uuidv4` / `uuid` - Generate UUID v4
-- `now` - Current time in RFC3339 format
-- `timestamp` - Current Unix timestamp
-- `iso8601` - Current time in ISO 8601 format
-- `rfc3339` - Current time in RFC3339 format
-- `randomInt min max` - Random integer
-- `randomString length` - Random string
-- `base64 string` - Base64 encode
-- `upper string` - Uppercase
-- `lower string` - Lowercase
-- `title string` - Title case
-- `trim string` - Trim whitespace
-
-## Request Options
-
-### Retries
-
-```yaml
-- method: GET
-  url: https://httpbin.org/status/500
+- **Retries:**  
+  ```yaml
   options:
     retries: 3
-```
-
-### Redirect Handling
-
-```yaml
-- method: GET
-  url: https://httpbin.org/redirect/1
+  ```
+- **Redirects:**  
+  ```yaml
   options:
     follow_redirect: false
-  asserts:
-    status:
-      - op: equals
-        value: 302
-```
+  ```
 
-## Form Data
+---
 
-Submit form data with different content types:
+### Form Data
 
 ```yaml
-- method: POST
-  url: https://httpbin.org/post
-  headers:
-    Content-Type: application/x-www-form-urlencoded
-  body: "name=John&email=john@example.com"
+headers:
+  Content-Type: application/x-www-form-urlencoded
+body: "name=John&email=john@example.com"
 ```
 
-## Multi-Step Workflows
+---
 
-Chain multiple requests together:
+### Multi-Step Workflows
+
+Chain requests and use captured data:
 
 ```yaml
-# Step 1: Login
 - method: POST
   url: https://httpbin.org/post
   body: |
@@ -391,29 +236,25 @@ Chain multiple requests together:
       - name: session_token
         path: $.json.username
 
-# Step 2: Get user data
 - method: GET
   url: https://httpbin.org/headers
   headers:
     Authorization: "Bearer {{.session_token}}"
-  asserts:
-    status:
-      - op: equals
-        value: 200
-
-# Step 3: Update user
-- method: PUT
-  url: https://httpbin.org/put
-  headers:
-    Authorization: "Bearer {{.session_token}}"
-    Content-Type: application/json
-  body: |
-    {"name": "Updated Name"}
 ```
+
+---
+
+## Debugging and Secret Redaction
+
+- Run with `--debug` to see request/response details.
+- Secrets and redacted captures are replaced with `[S256:xxxxxxxxxxxxxxxx]` in debug output.
+- The real values are still used for requests and variable substitution.
+
+---
 
 ## Examples
 
-The `examples/` directory contains comprehensive examples.
+See the `examples/` directory for more sample files.
 
 Run all examples:
 
@@ -421,65 +262,30 @@ Run all examples:
 make examples
 ```
 
-## Debug Mode
+---
 
-Enable debug output to see detailed request and response information:
+## Other Features
 
-```bash
-rq --debug test.yaml
-```
+- **Rate limiting:**  
+  `rq --rate-limit 10 test.yaml`
+- **Repeated execution:**  
+  `rq --repeat 100 test.yaml`
+- **Exit codes:**  
+  `0` = success, `1` = failure or error
 
-Debug mode shows:
-- Complete HTTP request headers and body (with secrets redacted)
-- Complete HTTP response headers and body (with secrets redacted)
-- Template variable values
-- Assertion evaluation details
+---
 
-### Secret Redaction in Debug Output
+## Troubleshooting
 
-When debug mode is enabled, any secret values provided via `--secret` or `--secret-file` are automatically redacted in all debug output (requests and responses). Instead of showing the actual secret, rq replaces it with a deterministic hash in the format:
+rq provides clear error messages for:
 
-```
-[S256:xxxxxxxxxxxxxxxx]
-```
+- Invalid YAML
+- Network failures
+- Assertion failures
+- Template errors
+- JSONPath errors
 
-Where `xxxxxxxxxxxxxxxx` is the first 16 hex digits of the SHA256 hash of the salt (see `--secret-salt`) concatenated with the secret value. This ensures secrets are never leaked in logs, while still allowing you to distinguish different secrets.
-
-- The salt defaults to the current date, but can be set explicitly with `--secret-salt SALT` for reproducible output.
-- Example: If you pass `--secret api_key=supersecret` and `--secret-salt my-salt`, any occurrence of `supersecret` in debug output will be replaced with `[S256:xxxxxxxxxxxxxxxx]` (the hash of `my-salt` + `supersecret`).
-
-**Note:** The actual HTTP requests sent to the server use the real secret values. Only the debug output is redacted.
-
-## Rate Limiting
-
-Control request rate to avoid overwhelming servers:
-
-```bash
-rq --rate-limit 10 test.yaml  # 10 requests per second
-```
-
-## Repeated Execution
-
-Run tests multiple times for load testing or reliability checks:
-
-```bash
-rq --repeat 100 test.yaml
-```
-
-## Exit Codes
-
-- `0` - All tests passed
-- `1` - Tests failed, configuration error, or parsing error
-
-## Error Handling
-
-rq provides detailed error messages for common issues:
-
-- Invalid YAML syntax
-- Network connection failures
-- Assertion failures with expected vs actual values
-- Template variable resolution errors
-- JSONPath expression errors
+---
 
 ## License
 

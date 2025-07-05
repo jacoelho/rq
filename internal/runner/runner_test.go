@@ -15,8 +15,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jacoelho/rq/internal/config"
 	"github.com/jacoelho/rq/internal/parser"
+	"github.com/jacoelho/rq/internal/ratelimit"
 )
+
+// newDefault creates a new Runner with default configuration for testing.
+func newDefault() *Runner {
+	return &Runner{
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+		variables:   make(map[string]any),
+		rateLimiter: ratelimit.New(0),
+	}
+}
 
 // checkNumericValue is a helper function to check numeric values from JSONPath
 // which can return int, float64, or json.Number depending on the JSON parser.
@@ -62,17 +75,21 @@ func TestExecuteCaptures(t *testing.T) {
 	}))
 	defer server.Close()
 
-	runner := NewDefault()
+	runner := &Runner{
+		config: &config.Config{
+			Secrets: make(map[string]any),
+		},
+	}
 
 	tests := []struct {
 		name     string
 		captures *parser.Captures
-		check    func(t *testing.T, captureMap map[string]any)
+		check    func(t *testing.T, captureMap map[string]CaptureValue)
 	}{
 		{
 			name:     "nil_captures",
 			captures: nil,
-			check: func(t *testing.T, captureMap map[string]any) {
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
 				if len(captureMap) != 0 {
 					t.Errorf("expected empty capture map, got %v", captureMap)
 				}
@@ -85,9 +102,9 @@ func TestExecuteCaptures(t *testing.T) {
 					{Name: "response_status"},
 				},
 			},
-			check: func(t *testing.T, captureMap map[string]any) {
-				if captureMap["response_status"] != 200 {
-					t.Errorf("response_status = %v, want 200", captureMap["response_status"])
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
+				if captureMap["response_status"].Value != 200 {
+					t.Errorf("response_status = %v, want 200", captureMap["response_status"].Value)
 				}
 			},
 		},
@@ -101,18 +118,18 @@ func TestExecuteCaptures(t *testing.T) {
 					{Name: "missing_header", HeaderName: "X-Missing"},
 				},
 			},
-			check: func(t *testing.T, captureMap map[string]any) {
-				if captureMap["content_type"] != "application/json" {
-					t.Errorf("content_type = %v, want application/json", captureMap["content_type"])
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
+				if captureMap["content_type"].Value != "application/json" {
+					t.Errorf("content_type = %v, want application/json", captureMap["content_type"].Value)
 				}
-				if captureMap["custom_header"] != "test-value" {
-					t.Errorf("custom_header = %v, want test-value", captureMap["custom_header"])
+				if captureMap["custom_header"].Value != "test-value" {
+					t.Errorf("custom_header = %v, want test-value", captureMap["custom_header"].Value)
 				}
-				if captureMap["server_header"] == "" {
+				if captureMap["server_header"].Value == "" {
 					t.Error("server_header should not be empty")
 				}
-				if captureMap["missing_header"] != "" {
-					t.Errorf("missing_header = %v, want empty string", captureMap["missing_header"])
+				if captureMap["missing_header"].Value != "" {
+					t.Errorf("missing_header = %v, want empty string", captureMap["missing_header"].Value)
 				}
 			},
 		},
@@ -124,14 +141,14 @@ func TestExecuteCaptures(t *testing.T) {
 					{Name: "user_name", Path: "$.user.name"},
 				},
 			},
-			check: func(t *testing.T, captureMap map[string]any) {
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
 				if userID, exists := captureMap["user_id"]; !exists {
 					t.Error("expected capture user_id to exist")
 				} else {
-					checkNumericValue(t, userID, 123, "jsonpath capture user_id")
+					checkNumericValue(t, userID.Value, 123, "jsonpath capture user_id")
 				}
-				if captureMap["user_name"] != "Alice" {
-					t.Errorf("user_name = %v, want Alice", captureMap["user_name"])
+				if captureMap["user_name"].Value != "Alice" {
+					t.Errorf("user_name = %v, want Alice", captureMap["user_name"].Value)
 				}
 			},
 		},
@@ -143,12 +160,12 @@ func TestExecuteCaptures(t *testing.T) {
 					{Name: "full_version_text", Pattern: `Version: \d+\.\d+\.\d+`, Group: 0},
 				},
 			},
-			check: func(t *testing.T, captureMap map[string]any) {
-				if captureMap["version"] != "1.2.3" {
-					t.Errorf("version = %v, want 1.2.3", captureMap["version"])
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
+				if captureMap["version"].Value != "1.2.3" {
+					t.Errorf("version = %v, want 1.2.3", captureMap["version"].Value)
 				}
-				if captureMap["full_version_text"] != "Version: 1.2.3" {
-					t.Errorf("full_version_text = %v, want 'Version: 1.2.3'", captureMap["full_version_text"])
+				if captureMap["full_version_text"].Value != "Version: 1.2.3" {
+					t.Errorf("full_version_text = %v, want 'Version: 1.2.3'", captureMap["full_version_text"].Value)
 				}
 			},
 		},
@@ -159,7 +176,7 @@ func TestExecuteCaptures(t *testing.T) {
 					{Name: "raw_body"},
 				},
 			},
-			check: func(t *testing.T, captureMap map[string]any) {
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
 				expected := `{
 			"user": {
 				"id": 123,
@@ -168,8 +185,8 @@ func TestExecuteCaptures(t *testing.T) {
 			"status": "success",
 			"message": "Version: 1.2.3 is available"
 		}`
-				if captureMap["raw_body"] != expected {
-					t.Errorf("raw_body = %v, want %v", captureMap["raw_body"], expected)
+				if captureMap["raw_body"].Value != expected {
+					t.Errorf("raw_body = %v, want %v", captureMap["raw_body"].Value, expected)
 				}
 			},
 		},
@@ -183,12 +200,51 @@ func TestExecuteCaptures(t *testing.T) {
 					{Name: "user_status", Path: "$.status"},
 				},
 			},
-			check: func(t *testing.T, captureMap map[string]any) {
-				if captureMap["status_code"] != 200 {
-					t.Errorf("status_code = %v, want 200", captureMap["status_code"])
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
+				if captureMap["status_code"].Value != 200 {
+					t.Errorf("status_code = %v, want 200", captureMap["status_code"].Value)
 				}
-				if captureMap["user_status"] != "success" {
-					t.Errorf("user_status = %v, want success", captureMap["user_status"])
+				if captureMap["user_status"].Value != "success" {
+					t.Errorf("user_status = %v, want success", captureMap["user_status"].Value)
+				}
+			},
+		},
+		{
+			name: "secret_captures",
+			captures: &parser.Captures{
+				Headers: []parser.HeaderCapture{
+					{Name: "auth_token", HeaderName: "X-Custom-Header", Redact: true},
+				},
+				JSONPath: []parser.JSONPathCapture{
+					{Name: "api_key", Path: "$.user.id", Redact: true},
+				},
+				Regex: []parser.RegexCapture{
+					{Name: "version", Pattern: `Version: (\d+\.\d+\.\d+)`, Group: 1, Redact: true},
+				},
+			},
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
+				// Check that values are captured normally
+				if captureMap["auth_token"].Value != "test-value" {
+					t.Errorf("auth_token = %v, want test-value", captureMap["auth_token"].Value)
+				}
+				if userID, exists := captureMap["api_key"]; !exists {
+					t.Error("expected capture api_key to exist")
+				} else {
+					checkNumericValue(t, userID.Value, 123, "jsonpath capture api_key")
+				}
+				if captureMap["version"].Value != "1.2.3" {
+					t.Errorf("version = %v, want 1.2.3", captureMap["version"].Value)
+				}
+
+				// Check that Redact is set to true for secret captures
+				if !captureMap["auth_token"].Redact {
+					t.Error("expected auth_token to have Redact=true")
+				}
+				if !captureMap["api_key"].Redact {
+					t.Error("expected api_key to have Redact=true")
+				}
+				if !captureMap["version"].Redact {
+					t.Error("expected version to have Redact=true")
 				}
 			},
 		},
@@ -206,7 +262,7 @@ func TestExecuteCaptures(t *testing.T) {
 			body.ReadFrom(resp.Body)
 			bodyBytes := body.Bytes()
 
-			captureMap := make(map[string]any)
+			captureMap := make(map[string]CaptureValue)
 			err = runner.executeCaptures(tt.captures, resp, bodyBytes, captureMap)
 			if err != nil {
 				t.Fatalf("executeCaptures failed: %v", err)
@@ -220,7 +276,7 @@ func TestExecuteCaptures(t *testing.T) {
 func TestExecuteRegexCapture(t *testing.T) {
 	t.Parallel()
 
-	runner := &Runner{}
+	runner := newDefault()
 
 	tests := []struct {
 		name        string
@@ -293,7 +349,7 @@ func TestExecuteRegexCapture(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			captureMap := make(map[string]any)
+			captureMap := make(map[string]CaptureValue)
 			err := runner.executeRegexCapture(tt.capture, []byte(tt.body), captureMap)
 
 			if tt.expectError {
@@ -307,8 +363,8 @@ func TestExecuteRegexCapture(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			if captureMap[tt.capture.Name] != tt.expectValue {
-				t.Errorf("capture %s = %v, want %v", tt.capture.Name, captureMap[tt.capture.Name], tt.expectValue)
+			if captureMap[tt.capture.Name].Value != tt.expectValue {
+				t.Errorf("capture %s = %v, want %v", tt.capture.Name, captureMap[tt.capture.Name].Value, tt.expectValue)
 			}
 		})
 	}
@@ -317,7 +373,7 @@ func TestExecuteRegexCapture(t *testing.T) {
 func TestExecuteCapturesErrorCases(t *testing.T) {
 	t.Parallel()
 
-	runner := &Runner{}
+	runner := newDefault()
 
 	tests := []struct {
 		name     string
@@ -342,7 +398,7 @@ func TestExecuteCapturesErrorCases(t *testing.T) {
 				Header:     make(http.Header),
 			}
 			body := []byte(`{"test": "value"}`)
-			captureMap := make(map[string]any)
+			captureMap := make(map[string]CaptureValue)
 
 			err := runner.executeCaptures(tt.captures, resp, body, captureMap)
 
@@ -356,7 +412,7 @@ func TestExecuteCapturesErrorCases(t *testing.T) {
 }
 
 func TestExtractCertificateField(t *testing.T) {
-	runner := NewDefault()
+	runner := newDefault()
 
 	tests := []struct {
 		name          string
@@ -612,7 +668,7 @@ func TestExecuteStepWithRetries(t *testing.T) {
 			}))
 			defer server.Close()
 
-			runner := NewDefault()
+			runner := newDefault()
 
 			step := parser.Step{
 				Method: "GET",
@@ -632,7 +688,7 @@ func TestExecuteStepWithRetries(t *testing.T) {
 				},
 			}
 
-			captures := make(map[string]any)
+			captures := make(map[string]CaptureValue)
 			requestMade, err := runner.executeStep(context.Background(), step, captures)
 
 			if !requestMade {
@@ -668,7 +724,7 @@ func TestExecuteStepWithRetriesCaptureFail(t *testing.T) {
 	}))
 	defer server.Close()
 
-	runner := NewDefault()
+	runner := newDefault()
 
 	step := parser.Step{
 		Method: "GET",
@@ -689,7 +745,7 @@ func TestExecuteStepWithRetriesCaptureFail(t *testing.T) {
 		},
 	}
 
-	captures := make(map[string]any)
+	captures := make(map[string]CaptureValue)
 	requestMade, err := runner.executeStep(context.Background(), step, captures)
 
 	if !requestMade {
@@ -716,7 +772,7 @@ func TestExecuteStepWithRetriesNoRetriesNeeded(t *testing.T) {
 	}))
 	defer server.Close()
 
-	runner := NewDefault()
+	runner := newDefault()
 
 	step := parser.Step{
 		Method: "GET",
@@ -736,7 +792,7 @@ func TestExecuteStepWithRetriesNoRetriesNeeded(t *testing.T) {
 		},
 	}
 
-	captures := make(map[string]any)
+	captures := make(map[string]CaptureValue)
 	requestMade, err := runner.executeStep(context.Background(), step, captures)
 
 	if !requestMade {
@@ -755,7 +811,7 @@ func TestExecuteStepWithRetriesNoRetriesNeeded(t *testing.T) {
 func TestExecuteStepRetriesWithTemplateError(t *testing.T) {
 	t.Parallel()
 
-	runner := NewDefault()
+	runner := newDefault()
 
 	step := parser.Step{
 		Method: "GET",
@@ -765,7 +821,7 @@ func TestExecuteStepRetriesWithTemplateError(t *testing.T) {
 		},
 	}
 
-	captures := make(map[string]any)
+	captures := make(map[string]CaptureValue)
 	requestMade, err := runner.executeStep(context.Background(), step, captures)
 
 	if requestMade {
@@ -784,7 +840,7 @@ func TestExecuteStepRetriesWithTemplateError(t *testing.T) {
 func TestValidateStep(t *testing.T) {
 	t.Parallel()
 
-	runner := NewDefault()
+	runner := newDefault()
 
 	tests := []struct {
 		name        string
@@ -977,10 +1033,10 @@ func TestQueryParameters(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			runner := NewDefault()
-			captures := map[string]any{
-				"search_term": "Install Linux",
-				"limit":       "20",
+			runner := newDefault()
+			captures := map[string]CaptureValue{
+				"search_term": {Value: "Install Linux", Redact: false},
+				"limit":       {Value: "20", Redact: false},
 			}
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
