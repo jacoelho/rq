@@ -68,37 +68,43 @@ type XPathAssert struct {
 
 // StatusCapture represents a capture of the HTTP status code.
 type StatusCapture struct {
-	Name string `yaml:"name"` // Variable name to store the captured status
+	Name   string `yaml:"name"`   // Variable name to store the captured status
+	Redact bool   `yaml:"redact"` // Whether to add this value to secrets map for redaction
 }
 
 // HeaderCapture represents a capture of a specific HTTP header.
 type HeaderCapture struct {
 	Name       string `yaml:"name"`        // Variable name to store the captured value
 	HeaderName string `yaml:"header_name"` // Header name to capture
+	Redact     bool   `yaml:"redact"`      // Whether to add this value to secrets map for redaction
 }
 
 // CertificateCapture represents a capture of SSL certificate information.
 type CertificateCapture struct {
 	Name             string `yaml:"name"`              // Variable name to store the captured value
-	CertificateField string `yaml:"certificate_field"` // Certificate field to capture (subject, issuer, expire_date, serial_number)
+	CertificateField string `yaml:"certificate_field"` // Certificate field to capture
+	Redact           bool   `yaml:"redact"`            // Whether to add this value to secrets map for redaction
 }
 
-// JSONPathCapture represents a capture using a JSONPath expression.
+// JSONPathCapture represents a capture using JSONPath expressions.
 type JSONPathCapture struct {
-	Name string `yaml:"name"` // Variable name to store the captured value
-	Path string `yaml:"path"` // JSONPath expression
+	Name   string `yaml:"name"`   // Variable name to store the captured value
+	Path   string `yaml:"path"`   // JSONPath expression
+	Redact bool   `yaml:"redact"` // Whether to add this value to secrets map for redaction
 }
 
-// RegexCapture represents a capture using a regular expression.
+// RegexCapture represents a capture using regular expressions.
 type RegexCapture struct {
 	Name    string `yaml:"name"`    // Variable name to store the captured value
-	Pattern string `yaml:"pattern"` // Regex pattern to match
-	Group   int    `yaml:"group"`   // Capture group number (0 for full match, 1+ for groups)
+	Pattern string `yaml:"pattern"` // Regular expression pattern
+	Group   int    `yaml:"group"`   // Capture group number (0 for full match)
+	Redact  bool   `yaml:"redact"`  // Whether to add this value to secrets map for redaction
 }
 
 // BodyCapture represents a capture of the entire response body.
 type BodyCapture struct {
-	Name string `yaml:"name"` // Variable name to store the captured body
+	Name   string `yaml:"name"`   // Variable name to store the captured body
+	Redact bool   `yaml:"redact"` // Whether to add this value to secrets map for redaction
 }
 
 // Asserts groups all supported assertion types for a step.

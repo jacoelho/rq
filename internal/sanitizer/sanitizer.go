@@ -11,17 +11,17 @@ import (
 )
 
 // DumpRequestRedacted dumps an HTTP request with secrets redacted.
-func DumpRequestRedacted(req *http.Request, secrets map[string]any, salt string) ([]byte, error) {
+func DumpRequestRedacted(req *http.Request, redactValues []any, salt string) ([]byte, error) {
 	dump, err := httputil.DumpRequestOut(req, true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dump request: %w", err)
 	}
 
-	return redactSecrets(dump, secrets, salt), nil
+	return redactBody(dump, redactValues, salt), nil
 }
 
 // DumpResponseRedacted dumps an HTTP response with secrets redacted.
-func DumpResponseRedacted(resp *http.Response, body []byte, secrets map[string]any, salt string) ([]byte, error) {
+func DumpResponseRedacted(resp *http.Response, body []byte, redactValues []any, salt string) ([]byte, error) {
 	clone := new(http.Response)
 	*clone = *resp
 	clone.Body = io.NopCloser(bytes.NewReader(body))
@@ -31,19 +31,19 @@ func DumpResponseRedacted(resp *http.Response, body []byte, secrets map[string]a
 		return nil, fmt.Errorf("failed to dump response: %w", err)
 	}
 
-	return redactSecrets(dump, secrets, salt), nil
+	return redactBody(dump, redactValues, salt), nil
 }
 
-// redactSecrets replaces secret values in the given data with [S256:hash].
-func redactSecrets(data []byte, secrets map[string]any, salt string) []byte {
-	if len(secrets) == 0 || len(data) == 0 {
+// redactBody replaces secret values in the given data with [S256:hash].
+func redactBody(data []byte, redactValues []any, salt string) []byte {
+	if len(redactValues) == 0 || len(data) == 0 {
 		return data
 	}
 
 	var out []byte
 	changed := false
 
-	for _, v := range secrets {
+	for _, v := range redactValues {
 		s, ok := v.(string)
 		if !ok || s == "" {
 			continue
