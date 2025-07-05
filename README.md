@@ -47,6 +47,20 @@ rq test.yaml
 rq [options] <file1.yaml> [file2.yaml...]
 ```
 
+#### Flags
+
+- `--debug`                 Enable debug output showing request and response details
+- `--secret NAME=VALUE`     Secret in format name=value (can be used multiple times)
+- `--secret-file FILE`      Path to key=value file containing secrets
+- `--secret-salt SALT`      Salt to use for secret redaction hashes (default: current date)
+- `--rate-limit N`          Rate limit in requests per second (0 for unlimited)
+- `--repeat N`              Number of additional times to repeat after first run (negative for infinite)
+- `--insecure`              Skip TLS certificate verification
+- `--cacert FILE`           Path to CA certificate file for TLS verification
+- `--timeout DURATION`      HTTP request timeout (default: 30s)
+- `-h, --help`              Show help message
+- `-v, --version`           Show version information
+
 ### YAML Structure
 
 Each YAML file contains a list of HTTP steps:
@@ -416,10 +430,25 @@ rq --debug test.yaml
 ```
 
 Debug mode shows:
-- Complete HTTP request headers and body
-- Complete HTTP response headers and body
+- Complete HTTP request headers and body (with secrets redacted)
+- Complete HTTP response headers and body (with secrets redacted)
 - Template variable values
 - Assertion evaluation details
+
+### Secret Redaction in Debug Output
+
+When debug mode is enabled, any secret values provided via `--secret` or `--secret-file` are automatically redacted in all debug output (requests and responses). Instead of showing the actual secret, rq replaces it with a deterministic hash in the format:
+
+```
+[S256:xxxxxxxxxxxxxxxx]
+```
+
+Where `xxxxxxxxxxxxxxxx` is the first 16 hex digits of the SHA256 hash of the salt (see `--secret-salt`) concatenated with the secret value. This ensures secrets are never leaked in logs, while still allowing you to distinguish different secrets.
+
+- The salt defaults to the current date, but can be set explicitly with `--secret-salt SALT` for reproducible output.
+- Example: If you pass `--secret api_key=supersecret` and `--secret-salt my-salt`, any occurrence of `supersecret` in debug output will be replaced with `[S256:xxxxxxxxxxxxxxxx]` (the hash of `my-salt` + `supersecret`).
+
+**Note:** The actual HTTP requests sent to the server use the real secret values. Only the debug output is redacted.
 
 ## Rate Limiting
 

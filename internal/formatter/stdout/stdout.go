@@ -42,6 +42,29 @@ func (f *Formatter) Format(summaries ...*results.Summary) error {
 	return nil
 }
 
+// Debug outputs debug information with a description and data.
+func (f *Formatter) Debug(description string, data []byte) error {
+	if _, err := fmt.Fprintln(f.writer, "========================================"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(f.writer, "%s:\n", description); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(f.writer, "========================================"); err != nil {
+		return err
+	}
+
+	if _, err := f.writer.Write(data); err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintln(f.writer); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // formatSingle formats a single iteration summary in stdout format.
 func (f *Formatter) formatSingle(s *results.Summary) error {
 	// Print individual file results

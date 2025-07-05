@@ -22,6 +22,10 @@ const (
 	DefaultTimeout = 30 * time.Second
 )
 
+// timeNow is a function that returns the current time.
+// can be overridden in tests for deterministic behavior.
+var timeNow = time.Now
+
 var (
 	ErrNoArguments           = errors.New("no arguments provided")
 	ErrNoTestFiles           = errors.New("no test files specified")
@@ -48,6 +52,9 @@ type Config struct {
 	Secrets    map[string]any
 	SecretFile string
 	Variables  map[string]any
+
+	// Secret salt for redaction hashes
+	SecretSalt string
 }
 
 // TLSConfig returns a TLS configuration based on the config settings.
@@ -190,6 +197,7 @@ func Parse(args []string) (*Config, *exit.Result) {
 		variableFile = fs.String("variable-file", "", "Path to key=value file containing template variables")
 		timeout      = fs.Duration("timeout", DefaultTimeout, "HTTP request timeout")
 		rateLimit    = fs.Float64("rate-limit", 0, "Rate limit in requests per second (0 for unlimited)")
+		secretSalt   = fs.String("secret-salt", timeNow().Format("2006-01-02"), "Salt to use for secret redaction hashes (default: current date)")
 	)
 
 	fs.Var(secrets, "secret", "Secret in format name=value (can be used multiple times)")
@@ -248,6 +256,7 @@ func Parse(args []string) (*Config, *exit.Result) {
 		Secrets:        finalSecrets,
 		SecretFile:     *secretFile,
 		Variables:      finalVariables,
+		SecretSalt:     *secretSalt,
 	}
 
 	if err := config.Validate(); err != nil {
@@ -309,6 +318,7 @@ Options:
   --rate-limit N          Rate limit in requests per second (0 for unlimited)
   --secret NAME=VALUE     Secret in format name=value (can be used multiple times)
   --secret-file FILE      Path to key=value file containing secrets
+  --secret-salt SALT      Salt to use for secret redaction hashes (default: current date)
   --variable NAME=VALUE   Variable in format name=value (can be used multiple times)
   --variable-file FILE    Path to key=value file containing template variables
   -h, --help              Show this help message

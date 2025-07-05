@@ -10,4 +10,7 @@ type Formatter interface {
 	// Format automatically determines whether to format as single or aggregated results
 	// based on the number of summaries provided. The formatter decides where to output.
 	Format(summaries ...*results.Summary) error
+
+	// Debug outputs debug information with a description and data.
+	Debug(description string, data []byte) error
 }

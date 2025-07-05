@@ -1,14 +1,12 @@
 package runner
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
 	"regexp"
@@ -24,6 +22,7 @@ import (
 	"github.com/jacoelho/rq/internal/parser"
 	"github.com/jacoelho/rq/internal/ratelimit"
 	"github.com/jacoelho/rq/internal/results"
+	"github.com/jacoelho/rq/internal/sanitizer"
 	"github.com/jacoelho/rq/internal/template"
 	"github.com/theory/jsonpath"
 )
@@ -341,16 +340,16 @@ func (r *Runner) executeStepAttempt(ctx context.Context, step parser.Step, captu
 		return true, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	if r.config != nil && r.config.Debug {
-		r.debugResponse(resp, respBody)
-	}
-
 	if err := r.executeAssertions(step.Asserts, resp, respBody); err != nil {
 		return true, fmt.Errorf("assertion failed: %w", err)
 	}
 
 	if err := r.executeCaptures(step.Captures, resp, respBody, captures); err != nil {
 		return true, fmt.Errorf("capture failed: %w", err)
+	}
+
+	if r.config != nil && r.config.Debug {
+		r.debugResponse(resp, respBody)
 	}
 
 	return true, nil
@@ -371,37 +370,28 @@ func (r *Runner) getClient(options parser.Options) *http.Client {
 
 // debugRequest outputs detailed request information when debug mode is enabled.
 func (r *Runner) debugRequest(req *http.Request) {
-	fmt.Println("========================================")
-	fmt.Println("REQUEST:")
-	fmt.Println("========================================")
-
-	reqDump, err := httputil.DumpRequestOut(req, true)
+	reqDump, err := sanitizer.DumpRequestRedacted(req, r.config.Secrets, r.config.SecretSalt)
 	if err != nil {
 		fmt.Printf("Error dumping request: %v\n", err)
 		return
 	}
 
-	fmt.Print(string(reqDump))
-	fmt.Println()
+	if err := r.formatter.Debug("REQUEST", reqDump); err != nil {
+		fmt.Printf("Error formatting debug request: %v\n", err)
+	}
 }
 
 // debugResponse outputs detailed response information when debug mode is enabled.
 func (r *Runner) debugResponse(resp *http.Response, body []byte) {
-	fmt.Println("========================================")
-	fmt.Println("RESPONSE:")
-	fmt.Println("========================================")
-
-	resp.Body = io.NopCloser(bytes.NewReader(body))
-
-	respDump, err := httputil.DumpResponse(resp, true)
+	respDump, err := sanitizer.DumpResponseRedacted(resp, body, r.config.Secrets, r.config.SecretSalt)
 	if err != nil {
 		fmt.Printf("Error dumping response: %v\n", err)
 		return
 	}
 
-	fmt.Print(string(respDump))
-	fmt.Println("========================================")
-	fmt.Println()
+	if err := r.formatter.Debug("RESPONSE", respDump); err != nil {
+		fmt.Printf("Error formatting debug response: %v\n", err)
+	}
 }
 
 // executeAssertions validates all assertions against the HTTP response.
