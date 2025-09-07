@@ -42,10 +42,9 @@
         op: equals
         value: "testuser"
   captures:
-    headers:
-      - name: auth_header
-        header_name: Authorization
     jsonpath:
+      - name: auth_header
+        path: $.headers.Authorization
       - name: client_request_id
         path: $.json.client_info.request_id
 

@@ -131,6 +131,51 @@ func (h *HeaderAssert) UnmarshalYAML(node ast.Node) error {
 	return unmarshalAssertWithField(node, "name", &h.Name, &h.Predicate, "HeaderAssert")
 }
 
+// UnmarshalYAML implements custom YAML unmarshaling for HeaderCapture.
+func (h *HeaderCapture) UnmarshalYAML(node ast.Node) error {
+	mapNode, ok := node.(*ast.MappingNode)
+	if !ok {
+		return fmt.Errorf("%w: HeaderCapture: expected mapping node", ErrParser)
+	}
+
+	for _, valNode := range mapNode.Values {
+		kNode, ok := valNode.Key.(*ast.StringNode)
+		if !ok {
+			return fmt.Errorf("%w: HeaderCapture: key must be string", ErrParser)
+		}
+
+		switch kNode.Value {
+		case "name":
+			if stringVal, ok := valNode.Value.(*ast.StringNode); ok {
+				h.Name = stringVal.Value
+			} else {
+				return fmt.Errorf("%w: HeaderCapture: name must be string", ErrParser)
+			}
+		case "header_name":
+			if stringVal, ok := valNode.Value.(*ast.StringNode); ok {
+				h.HeaderName = stringVal.Value
+			} else {
+				return fmt.Errorf("%w: HeaderCapture: header_name must be string", ErrParser)
+			}
+		case "redact":
+			if boolVal, ok := valNode.Value.(*ast.BoolNode); ok {
+				h.Redact = boolVal.Value
+			} else {
+				return fmt.Errorf("%w: HeaderCapture: redact must be boolean", ErrParser)
+			}
+		}
+	}
+
+	if h.Name == "" {
+		return fmt.Errorf("%w: HeaderCapture: missing required 'name' field", ErrParser)
+	}
+	if h.HeaderName == "" {
+		return fmt.Errorf("%w: HeaderCapture: missing required 'header_name' field", ErrParser)
+	}
+
+	return nil
+}
+
 // UnmarshalYAML implements custom YAML unmarshaling for CertificateAssert.
 func (c *CertificateAssert) UnmarshalYAML(node ast.Node) error {
 	return unmarshalAssertWithField(node, "name", &c.Name, &c.Predicate, "CertificateAssert")
@@ -146,7 +191,7 @@ func (x *XPathAssert) UnmarshalYAML(node ast.Node) error {
 	return unmarshalAssertWithField(node, "path", &x.Path, &x.Predicate, "XPathAssert")
 }
 
-// unmarshalAssertWithField is a helper function to reduce code duplication
+// unmarshalAssertWithField is a helper function to reduce code duplication.
 func unmarshalAssertWithField(node ast.Node, fieldName string, fieldValue *string, predicate *Predicate, typeName string) error {
 	mapNode, ok := node.(*ast.MappingNode)
 	if !ok {

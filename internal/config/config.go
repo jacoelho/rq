@@ -22,8 +22,7 @@ const (
 	DefaultTimeout = 30 * time.Second
 )
 
-// timeNow is a function that returns the current time.
-// can be overridden in tests for deterministic behavior.
+// timeNow can be overridden in tests for deterministic behavior.
 var timeNow = time.Now
 
 var (
@@ -35,29 +34,22 @@ var (
 	ErrEmptyVariableName     = errors.New("variable name cannot be empty")
 )
 
-// Config represents the complete configuration for the rq tool.
 type Config struct {
-	// Test execution
 	TestFiles []string
 	Debug     bool
 	Repeat    int // Additional iterations after first run (negative = infinite)
 
-	// HTTP client configuration
 	Insecure       bool
 	CACertFile     string
 	RequestTimeout time.Duration
 	RateLimit      float64 // Requests per second (0 = unlimited)
 
-	// Template variables
 	Secrets    map[string]any
 	SecretFile string
 	Variables  map[string]any
-
-	// Secret salt for redaction hashes
 	SecretSalt string
 }
 
-// TLSConfig returns a TLS configuration based on the config settings.
 func (c *Config) TLSConfig() (*tls.Config, error) {
 	tlsConfig := &tls.Config{
 		InsecureSkipVerify: c.Insecure,
@@ -84,8 +76,7 @@ func (c *Config) TLSConfig() (*tls.Config, error) {
 	return tlsConfig, nil
 }
 
-// AllVariables returns a combined map of secrets and variables for template substitution.
-// Secrets take priority over variables when keys conflict.
+// AllVariables combines secrets and variables with secrets taking priority.
 func (c *Config) AllVariables() map[string]any {
 	combined := make(map[string]any)
 
@@ -95,7 +86,6 @@ func (c *Config) AllVariables() map[string]any {
 	return combined
 }
 
-// Validate validates the configuration and returns an error if invalid.
 func (c *Config) Validate() error {
 	if len(c.TestFiles) == 0 {
 		return ErrNoTestFiles
@@ -119,7 +109,6 @@ func (c *Config) Validate() error {
 // secretsFlag implements flag.Value for parsing multiple -secret flags.
 type secretsFlag map[string]any
 
-// String returns a string representation of the secrets flag for flag.Value interface.
 func (s secretsFlag) String() string {
 	var pairs []string
 	for k, v := range s {
@@ -128,7 +117,6 @@ func (s secretsFlag) String() string {
 	return strings.Join(pairs, ",")
 }
 
-// Set parses and stores a secret in name=value format for flag.Value interface.
 func (s secretsFlag) Set(value string) error {
 	parts := strings.SplitN(value, "=", 2)
 	if len(parts) != 2 {
@@ -147,7 +135,6 @@ func (s secretsFlag) Set(value string) error {
 // variablesFlag implements flag.Value for parsing multiple -variable flags.
 type variablesFlag map[string]any
 
-// String returns a string representation of the variables flag for flag.Value interface.
 func (v variablesFlag) String() string {
 	var pairs []string
 	for k, val := range v {
@@ -156,7 +143,6 @@ func (v variablesFlag) String() string {
 	return strings.Join(pairs, ",")
 }
 
-// Set parses and stores a variable in name=value format for flag.Value interface.
 func (v variablesFlag) Set(value string) error {
 	parts := strings.SplitN(value, "=", 2)
 	if len(parts) != 2 {
@@ -172,8 +158,6 @@ func (v variablesFlag) Set(value string) error {
 	return nil
 }
 
-// Parse parses command-line arguments and returns a validated Config.
-// If parsing fails or help is requested, returns nil config and exit result.
 func Parse(args []string) (*Config, *exit.Result) {
 	if len(args) == 0 {
 		return nil, exit.Errorf("Error: %v\n\n%s", ErrNoArguments, Usage())
@@ -266,9 +250,7 @@ func Parse(args []string) (*Config, *exit.Result) {
 	return config, nil
 }
 
-// loadVariableFile loads variables from a key=value format file.
-// It supports comments (lines starting with #) and empty lines.
-// Returns an error if the file format is invalid or the file cannot be read.
+// loadVariableFile loads variables from key=value format with comment support.
 func loadVariableFile(filename string) (map[string]any, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
@@ -303,7 +285,6 @@ func loadVariableFile(filename string) (map[string]any, error) {
 	return variables, nil
 }
 
-// Usage returns a usage string for the CLI tool.
 func Usage() string {
 	return `rq - HTTP testing tool
 
@@ -335,7 +316,6 @@ Examples:
   rq test.yaml --variable HOST=localhost # Pass variable to test`
 }
 
-// HTTPClient creates an HTTP client configured with the settings from this Config.
 func (c *Config) HTTPClient() (*http.Client, error) {
 	tlsConfig, err := c.TLSConfig()
 	if err != nil {

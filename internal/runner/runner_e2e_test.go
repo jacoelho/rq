@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/jacoelho/rq/internal/config"
-	"github.com/jacoelho/rq/internal/formatter/stdout"
+	"github.com/jacoelho/rq/internal/results"
 )
 
 // TestRunnerEndToEnd tests the complete runner workflow with httptest server
@@ -145,9 +145,9 @@ func TestRunnerEndToEnd(t *testing.T) {
   captures:
     headers:
       - name: api_version
-        header: X-API-Version
+        header_name: X-API-Version
       - name: rate_limit
-        header: X-Rate-Limit`,
+        header_name: X-Rate-Limit`,
 			serverHandler: func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("X-API-Version", "v1.0")
@@ -213,13 +213,12 @@ func TestRunnerEndToEnd(t *testing.T) {
 			}
 
 			var outputBuf bytes.Buffer
-			runner.formatter = stdout.NewWithWriter(&outputBuf)
 
 			ctx := context.Background()
 			result, err := runner.ExecuteFiles(ctx, cfg.TestFiles)
 
 			if result != nil {
-				if formatErr := runner.formatter.Format(result); formatErr != nil {
+				if formatErr := result.Format(results.FormatText, &outputBuf); formatErr != nil {
 					t.Fatalf("Failed to format results: %v", formatErr)
 				}
 			}
@@ -319,13 +318,12 @@ func TestRunnerEndToEndMultipleFiles(t *testing.T) {
 	}
 
 	var outputBuf bytes.Buffer
-	runner.formatter = stdout.NewWithWriter(&outputBuf)
 
 	ctx := context.Background()
 	result, err := runner.ExecuteFiles(ctx, cfg.TestFiles)
 
 	if result != nil {
-		if formatErr := runner.formatter.Format(result); formatErr != nil {
+		if formatErr := result.Format(results.FormatText, &outputBuf); formatErr != nil {
 			t.Fatalf("Failed to format results: %v", formatErr)
 		}
 	}
@@ -397,7 +395,7 @@ func TestRunnerEndToEndWithRepeat(t *testing.T) {
 	}
 
 	var outputBuf bytes.Buffer
-	runner.formatter = stdout.NewWithWriter(&outputBuf)
+	runner.SetOutput(&outputBuf)
 
 	ctx := context.Background()
 	exitCode := runner.Run(ctx)
@@ -607,13 +605,13 @@ func TestRunnerSecretRedaction(t *testing.T) {
 	}
 
 	var outputBuf bytes.Buffer
-	runner.formatter = stdout.NewWithWriter(&outputBuf)
+	runner.SetOutput(&outputBuf)
 
 	ctx := context.Background()
 	result, err := runner.ExecuteFiles(ctx, cfg.TestFiles)
 
 	if result != nil {
-		if formatErr := runner.formatter.Format(result); formatErr != nil {
+		if formatErr := result.Format(results.FormatText, &outputBuf); formatErr != nil {
 			t.Fatalf("Failed to format results: %v", formatErr)
 		}
 	}

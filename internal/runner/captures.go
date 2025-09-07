@@ -1,13 +1,11 @@
 package runner
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
 
+	"github.com/jacoelho/rq/internal/extractor"
 	"github.com/jacoelho/rq/internal/parser"
-	"github.com/theory/jsonpath"
 )
 
 // CaptureValue represents a captured value with redaction flag.
@@ -61,7 +59,11 @@ func (r *Runner) executeCaptures(captures *parser.Captures, resp *http.Response,
 // executeStatusCaptures processes status code captures.
 func (r *Runner) executeStatusCaptures(captures []parser.StatusCapture, resp *http.Response, captureMap map[string]CaptureValue) error {
 	for _, capture := range captures {
-		captureMap[capture.Name] = CaptureValue{Value: resp.StatusCode, Redact: capture.Redact}
+		statusCode, err := extractor.ExtractStatusCode(resp)
+		if err != nil {
+			return fmt.Errorf("status capture failed for %s: %w", capture.Name, err)
+		}
+		captureMap[capture.Name] = CaptureValue{Value: statusCode, Redact: capture.Redact}
 	}
 	return nil
 }
@@ -69,7 +71,14 @@ func (r *Runner) executeStatusCaptures(captures []parser.StatusCapture, resp *ht
 // executeHeaderCaptures processes header captures.
 func (r *Runner) executeHeaderCaptures(captures []parser.HeaderCapture, resp *http.Response, captureMap map[string]CaptureValue) error {
 	for _, capture := range captures {
-		headerValue := resp.Header.Get(capture.HeaderName)
+		headerValue, err := extractor.ExtractHeader(resp, capture.HeaderName)
+		if err != nil && !extractor.IsNotFound(err) {
+			return fmt.Errorf("header capture failed for %s: %w", capture.Name, err)
+		}
+		// If header not found, set empty string (existing behavior)
+		if extractor.IsNotFound(err) {
+			headerValue = ""
+		}
 		captureMap[capture.Name] = CaptureValue{Value: headerValue, Redact: capture.Redact}
 	}
 	return nil
@@ -78,10 +87,25 @@ func (r *Runner) executeHeaderCaptures(captures []parser.HeaderCapture, resp *ht
 // executeCertificateCaptures processes certificate captures.
 func (r *Runner) executeCertificateCaptures(captures []parser.CertificateCapture, resp *http.Response, captureMap map[string]CaptureValue) error {
 	for _, capture := range captures {
-		value, err := r.extractCertificateField(capture.CertificateField, resp)
+		certInfo, err := extractor.ExtractAllCertificateFields(resp)
 		if err != nil {
 			return fmt.Errorf("certificate capture failed for field %s: %w", capture.CertificateField, err)
 		}
+
+		var value any
+		switch capture.CertificateField {
+		case "subject":
+			value = certInfo.Subject
+		case "issuer":
+			value = certInfo.Issuer
+		case "expire_date":
+			value = certInfo.ExpireDate.Format("2006-01-02T15:04:05Z07:00")
+		case "serial_number":
+			value = certInfo.SerialNumber
+		default:
+			return fmt.Errorf("unsupported certificate field: %s (supported: subject, issuer, expire_date, serial_number)", capture.CertificateField)
+		}
+
 		captureMap[capture.Name] = CaptureValue{Value: value, Redact: capture.Redact}
 	}
 	return nil
@@ -90,23 +114,14 @@ func (r *Runner) executeCertificateCaptures(captures []parser.CertificateCapture
 // executeJSONPathCaptures processes JSONPath captures.
 func (r *Runner) executeJSONPathCaptures(captures []parser.JSONPathCapture, body []byte, captureMap map[string]CaptureValue) error {
 	for _, capture := range captures {
-		path, err := jsonpath.Parse(capture.Path)
-		if err != nil {
-			return fmt.Errorf("invalid capture JSONPath %s: %w", capture.Path, err)
+		value, err := extractor.ExtractJSONPath(body, capture.Path)
+		if err != nil && !extractor.IsNotFound(err) {
+			return fmt.Errorf("JSONPath capture failed for %s: %w", capture.Name, err)
 		}
-
-		var data any
-		if err := json.Unmarshal(body, &data); err != nil {
-			return fmt.Errorf("failed to parse JSON data for capture %s: %w", capture.Path, err)
+		// If path not found, value will be nil (existing behavior)
+		if extractor.IsNotFound(err) {
+			value = nil
 		}
-
-		results := path.Select(data)
-
-		var value any
-		if len(results) > 0 {
-			value = results[0]
-		}
-
 		captureMap[capture.Name] = CaptureValue{Value: value, Redact: capture.Redact}
 	}
 	return nil
@@ -125,29 +140,25 @@ func (r *Runner) executeRegexCaptures(captures []parser.RegexCapture, body []byt
 // executeBodyCaptures processes body captures.
 func (r *Runner) executeBodyCaptures(captures []parser.BodyCapture, body []byte, captureMap map[string]CaptureValue) error {
 	for _, capture := range captures {
-		captureMap[capture.Name] = CaptureValue{Value: string(body), Redact: capture.Redact}
+		bodyStr, err := extractor.ExtractBody(body)
+		if err != nil {
+			return fmt.Errorf("body capture failed for %s: %w", capture.Name, err)
+		}
+		captureMap[capture.Name] = CaptureValue{Value: bodyStr, Redact: capture.Redact}
 	}
 	return nil
 }
 
 // executeRegexCapture handles regex-based captures.
 func (r *Runner) executeRegexCapture(capture parser.RegexCapture, body []byte, captureMap map[string]CaptureValue) error {
-	re, err := regexp.Compile(capture.Pattern)
-	if err != nil {
-		return fmt.Errorf("invalid regex pattern %s: %w", capture.Pattern, err)
+	value, err := extractor.ExtractRegex(body, capture.Pattern, capture.Group)
+	if err != nil && !extractor.IsNotFound(err) {
+		return fmt.Errorf("regex capture failed for %s: %w", capture.Name, err)
 	}
-
-	matches := re.FindSubmatch(body)
-	if matches == nil {
-		captureMap[capture.Name] = CaptureValue{Value: nil, Redact: capture.Redact}
-		return nil
+	// If no match found, value will be nil (existing behavior)
+	if extractor.IsNotFound(err) {
+		value = nil
 	}
-
-	if capture.Group < 0 || capture.Group >= len(matches) {
-		return fmt.Errorf("invalid capture group %d for pattern %s (found %d groups)", capture.Group, capture.Pattern, len(matches)-1)
-	}
-
-	value := string(matches[capture.Group])
 	captureMap[capture.Name] = CaptureValue{Value: value, Redact: capture.Redact}
 	return nil
 }
