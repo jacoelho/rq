@@ -18,22 +18,18 @@ func ExtractJSONPath(body []byte, pathExpr string) (any, error) {
 		return nil, fmt.Errorf("%w: JSONPath expression is empty", ErrInvalidInput)
 	}
 
-	// Parse the JSONPath expression
 	path, err := jsonpath.Parse(pathExpr)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid JSONPath %s: %v", ErrExtraction, pathExpr, err)
 	}
 
-	// Parse the JSON data
 	var data any
 	if err := json.Unmarshal(body, &data); err != nil {
 		return nil, fmt.Errorf("%w: failed to parse JSON data: %v", ErrExtraction, err)
 	}
 
-	// Execute the JSONPath query
 	results := path.Select(data)
 
-	// Return the first result if available
 	if len(results) > 0 {
 		return results[0], nil
 	}
@@ -52,7 +48,6 @@ func ExtractJSONPathString(body []byte, path string) (string, error) {
 		return str, nil
 	}
 
-	// Try to convert to string
 	return fmt.Sprintf("%v", result), nil
 }
 
@@ -66,25 +61,21 @@ func ExtractRegex(body []byte, pattern string, group int) (any, error) {
 		return nil, fmt.Errorf("%w: capture group must be >= 0, got: %d", ErrInvalidInput, group)
 	}
 
-	// Compile the regex pattern
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid regex pattern %s: %v", ErrInvalidInput, pattern, err)
 	}
 
-	// Find all submatches
 	matches := re.FindSubmatch(body)
 	if matches == nil {
 		return nil, ErrNotFound
 	}
 
-	// Check if the requested group exists
 	if group >= len(matches) {
 		return nil, fmt.Errorf("%w: invalid capture group %d for pattern (found %d groups)",
 			ErrExtraction, group, len(matches)-1)
 	}
 
-	// Extract the specified group
 	value := string(matches[group])
 	return value, nil
 }
@@ -99,7 +90,6 @@ func ExtractAllRegex(body []byte, pattern string, group int) ([]string, error) {
 		return nil, fmt.Errorf("%w: capture group must be >= 0, got: %d", ErrInvalidInput, group)
 	}
 
-	// Compile the regex pattern
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid regex pattern %s: %v", ErrInvalidInput, pattern, err)

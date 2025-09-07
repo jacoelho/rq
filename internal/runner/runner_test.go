@@ -22,7 +22,6 @@ import (
 	"github.com/jacoelho/rq/internal/ratelimit"
 )
 
-// newDefault creates a new Runner with default configuration for testing.
 func newDefault() *Runner {
 	return &Runner{
 		client: &http.Client{
@@ -33,8 +32,7 @@ func newDefault() *Runner {
 	}
 }
 
-// checkNumericValue is a helper function to check numeric values from JSONPath
-// which can return int, float64, or json.Number depending on the JSON parser.
+// checkNumericValue handles varying JSON numeric types (int, float64, json.Number).
 func checkNumericValue(t *testing.T, actual any, expected int, fieldName string) {
 	t.Helper()
 
@@ -225,7 +223,6 @@ func TestExecuteCaptures(t *testing.T) {
 				},
 			},
 			check: func(t *testing.T, captureMap map[string]CaptureValue) {
-				// Check that values are captured normally
 				if captureMap["auth_token"].Value != "test-value" {
 					t.Errorf("auth_token = %v, want test-value", captureMap["auth_token"].Value)
 				}
@@ -238,7 +235,6 @@ func TestExecuteCaptures(t *testing.T) {
 					t.Errorf("version = %v, want 1.2.3", captureMap["version"].Value)
 				}
 
-				// Check that Redact is set to true for secret captures
 				if !captureMap["auth_token"].Redact {
 					t.Error("expected auth_token to have Redact=true")
 				}
@@ -504,10 +500,8 @@ func TestExtractCertificateField(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			resp := tt.setupResponse()
 
-			// Use the extractor package instead of the old method
 			certInfo, err := extractor.ExtractAllCertificateFields(resp)
 
-			// First check if extraction failed (for cases like no TLS or empty certs)
 			if err != nil {
 				if tt.expectError {
 					return // Expected error, test passes
@@ -517,7 +511,6 @@ func TestExtractCertificateField(t *testing.T) {
 				}
 			}
 
-			// Extract the specific field value
 			var value any
 			var fieldErr error
 			switch tt.field {
@@ -533,7 +526,6 @@ func TestExtractCertificateField(t *testing.T) {
 				fieldErr = fmt.Errorf("unsupported certificate field: %s", tt.field)
 			}
 
-			// Check if we expected an error
 			if tt.expectError {
 				if fieldErr == nil {
 					t.Error("expected error for unsupported field, got nil")
@@ -541,7 +533,6 @@ func TestExtractCertificateField(t *testing.T) {
 				return
 			}
 
-			// If we didn't expect an error but got one, that's a problem
 			if fieldErr != nil {
 				t.Errorf("unexpected field error: %v", fieldErr)
 				return
@@ -692,7 +683,6 @@ func TestExecuteStepWithRetries(t *testing.T) {
 					w.WriteHeader(response.status)
 					w.Write([]byte(response.body))
 				} else {
-					// Default to last response if we run out
 					lastResponse := tt.serverResponses[len(tt.serverResponses)-1]
 					w.WriteHeader(lastResponse.status)
 					w.Write([]byte(lastResponse.body))
