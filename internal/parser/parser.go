@@ -191,7 +191,7 @@ func (x *XPathAssert) UnmarshalYAML(node ast.Node) error {
 	return unmarshalAssertWithField(node, "path", &x.Path, &x.Predicate, "XPathAssert")
 }
 
-// unmarshalAssertWithField is a helper function to reduce code duplication
+// unmarshalAssertWithField is a helper function to reduce code duplication.
 func unmarshalAssertWithField(node ast.Node, fieldName string, fieldValue *string, predicate *Predicate, typeName string) error {
 	mapNode, ok := node.(*ast.MappingNode)
 	if !ok {

@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-// CertificateInfo contains SSL/TLS certificate information extracted from HTTPS responses.
-// All fields represent commonly accessed certificate attributes for validation and debugging.
 type CertificateInfo struct {
 	Subject      string    `json:"subject"`
 	Issuer       string    `json:"issuer"`
@@ -15,11 +13,7 @@ type CertificateInfo struct {
 	SerialNumber string    `json:"serial_number"`
 }
 
-// ExtractAllCertificateFields extracts comprehensive SSL/TLS certificate information.
-// Returns structured certificate data from the first peer certificate in the TLS connection.
-// Useful for certificate validation, debugging, and compliance checking.
-// Returns ErrInvalidInput if response is nil.
-// Returns ErrNotFound if no TLS connection exists or no peer certificates are available.
+// ExtractAllCertificateFields uses the first peer certificate in the TLS connection.
 func ExtractAllCertificateFields(resp *http.Response) (*CertificateInfo, error) {
 	if resp == nil {
 		return nil, fmt.Errorf("%w: response is nil", ErrInvalidInput)

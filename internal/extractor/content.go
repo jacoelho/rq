@@ -8,11 +8,7 @@ import (
 	"github.com/theory/jsonpath"
 )
 
-// ExtractJSONPath extracts data from JSON using JSONPath expressions.
-// Supports standard JSONPath syntax for navigating JSON structures (e.g., "$.user.name", "$..items[0]").
-// Returns the first matching result, or ErrNotFound if no matches are found.
-// Returns ErrExtraction for invalid JSON data or malformed JSONPath expressions.
-// Returns ErrInvalidInput if body is empty or pathExpr is empty.
+// ExtractJSONPath supports standard JSONPath syntax (e.g., "$.user.name", "$..items[0]").
 func ExtractJSONPath(body []byte, pathExpr string) (any, error) {
 	if len(body) == 0 {
 		return nil, fmt.Errorf("%w: body is empty", ErrInvalidInput)
@@ -45,10 +41,7 @@ func ExtractJSONPath(body []byte, pathExpr string) (any, error) {
 	return nil, ErrNotFound
 }
 
-// ExtractJSONPathString extracts a JSONPath value and converts it to a string.
-// Convenience function that combines ExtractJSONPath with string conversion.
-// Non-string values are converted using fmt.Sprintf("%v", value).
-// Returns the same errors as ExtractJSONPath.
+// ExtractJSONPathString converts non-string values using fmt.Sprintf.
 func ExtractJSONPathString(body []byte, path string) (string, error) {
 	result, err := ExtractJSONPath(body, path)
 	if err != nil {
@@ -63,12 +56,7 @@ func ExtractJSONPathString(body []byte, path string) (string, error) {
 	return fmt.Sprintf("%v", result), nil
 }
 
-// ExtractRegex extracts data from content using regular expressions.
-// Returns the specified capture group from the first match found.
-// Group 0 returns the entire match, group 1+ return numbered capture groups.
-// Returns ErrNotFound if no matches are found.
-// Returns ErrInvalidInput for empty patterns, negative groups, or invalid regex.
-// Returns ErrExtraction if the specified group doesn't exist in the match.
+// ExtractRegex uses capture groups: 0 = entire match, 1+ = numbered groups.
 func ExtractRegex(body []byte, pattern string, group int) (any, error) {
 	if pattern == "" {
 		return nil, fmt.Errorf("%w: regex pattern is empty", ErrInvalidInput)
@@ -101,11 +89,7 @@ func ExtractRegex(body []byte, pattern string, group int) (any, error) {
 	return value, nil
 }
 
-// ExtractAllRegex finds all regex matches and extracts the specified capture group from each.
-// Similar to ExtractRegex but returns all matches instead of just the first one.
-// Useful for extracting multiple occurrences of a pattern (e.g., all email addresses).
-// Returns ErrNotFound if no matches are found.
-// Returns the same validation errors as ExtractRegex.
+// ExtractAllRegex extracts multiple occurrences (e.g., all email addresses).
 func ExtractAllRegex(body []byte, pattern string, group int) ([]string, error) {
 	if pattern == "" {
 		return nil, fmt.Errorf("%w: regex pattern is empty", ErrInvalidInput)
@@ -140,10 +124,6 @@ func ExtractAllRegex(body []byte, pattern string, group int) ([]string, error) {
 	return results, nil
 }
 
-// ExtractRegexString extracts a regex match and converts it to a string.
-// Convenience function that combines ExtractRegex with string conversion.
-// Since regex extraction already returns strings, this mainly provides type safety.
-// Returns the same errors as ExtractRegex.
 func ExtractRegexString(body []byte, pattern string, group int) (string, error) {
 	result, err := ExtractRegex(body, pattern, group)
 	if err != nil {

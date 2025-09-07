@@ -15,7 +15,6 @@ import (
 	"github.com/jacoelho/rq/internal/results"
 )
 
-// Runner executes HTTP test workflows.
 type Runner struct {
 	client      *http.Client
 	variables   map[string]any
@@ -24,7 +23,6 @@ type Runner struct {
 	output      io.Writer
 }
 
-// New creates a new Runner with the given configuration.
 func New(cfg *config.Config) (*Runner, *exit.Result) {
 	client, err := cfg.HTTPClient()
 	if err != nil {
@@ -42,12 +40,10 @@ func New(cfg *config.Config) (*Runner, *exit.Result) {
 	}, nil
 }
 
-// SetOutput sets a custom writer for output. Used primarily for testing.
 func (r *Runner) SetOutput(w io.Writer) {
 	r.output = w
 }
 
-// Run executes the test files according to the configuration.
 func (r *Runner) Run(ctx context.Context) int {
 	if r.config.Repeat < 0 {
 		return r.runInfiniteLoop(ctx)
@@ -55,7 +51,6 @@ func (r *Runner) Run(ctx context.Context) int {
 	return r.runFiniteLoop(ctx)
 }
 
-// runInfiniteLoop handles infinite execution (repeat < 0)
 func (r *Runner) runInfiniteLoop(ctx context.Context) int {
 	iteration := 1
 
@@ -77,7 +72,6 @@ func (r *Runner) runInfiniteLoop(ctx context.Context) int {
 			return 1
 		}
 
-		// Print results immediately for each iteration in infinite mode
 		if result != nil {
 			if err := result.Format(results.FormatText, r.output); err != nil {
 				fmt.Printf("Error formatting results: %v\n", err)
@@ -88,7 +82,6 @@ func (r *Runner) runInfiniteLoop(ctx context.Context) int {
 	}
 }
 
-// runFiniteLoop handles finite execution (repeat >= 0)
 func (r *Runner) runFiniteLoop(ctx context.Context) int {
 	var allResults []*results.Summary
 	totalIterations := r.config.Repeat + 1
@@ -122,12 +115,10 @@ func (r *Runner) runFiniteLoop(ctx context.Context) int {
 	return 0
 }
 
-// runOnce executes the test files once and returns the results
 func (r *Runner) runOnce(ctx context.Context) (*results.Summary, error) {
 	return r.ExecuteFiles(ctx, r.config.TestFiles)
 }
 
-// ExecuteFiles executes multiple test files and returns aggregated results.
 func (r *Runner) ExecuteFiles(ctx context.Context, files []string) (*results.Summary, error) {
 	s := results.NewSummary(len(files))
 
@@ -159,7 +150,6 @@ func (r *Runner) ExecuteFiles(ctx context.Context, files []string) (*results.Sum
 	return s, firstError
 }
 
-// executeFile executes a single test file and returns the number of requests made.
 func (r *Runner) executeFile(ctx context.Context, filename string) (int, error) {
 	file, err := os.Open(filename)
 	if err != nil {

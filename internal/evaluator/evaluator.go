@@ -20,10 +20,8 @@ var (
 	ErrUnsupported  = errors.New("unsupported operation")
 )
 
-// Operation represents a type-safe operation for evaluation
 type Operation string
 
-// Supported operations
 const (
 	OpEquals    Operation = "equals"
 	OpNotEquals Operation = "not_equals"
@@ -33,7 +31,6 @@ const (
 	OpLength    Operation = "length"
 )
 
-// ParseOperation converts a string to an Operation with validation
 func ParseOperation(s string) (Operation, error) {
 	op := Operation(s)
 	switch op {
@@ -44,12 +41,10 @@ func ParseOperation(s string) (Operation, error) {
 	}
 }
 
-// String returns the string representation of the operation
 func (op Operation) String() string {
 	return string(op)
 }
 
-// Evaluate performs the specified operation on actual and expected values
 func Evaluate(op Operation, actual, expected any) (bool, error) {
 	switch op {
 	case OpEquals:
@@ -69,18 +64,15 @@ func Evaluate(op Operation, actual, expected any) (bool, error) {
 	}
 }
 
-// evaluateEquals checks if two values are equal with smart numeric comparison.
+// evaluateEquals checks equality with smart numeric comparison.
 func evaluateEquals(actual, expected any) bool {
-	// First try exact deep equality
 	if reflect.DeepEqual(actual, expected) {
 		return true
 	}
 
-	// Handle numeric comparisons across different types
 	return numericEqual(actual, expected)
 }
 
-// numericEqual checks if two values are numerically equal across different types.
 func numericEqual(actual, expected any) bool {
 	actualNum, actualOk := toNumeric(actual)
 	expectedNum, expectedOk := toNumeric(expected)
@@ -92,18 +84,13 @@ func numericEqual(actual, expected any) bool {
 	return false
 }
 
-// toNumeric converts numeric types to float64 for comparison.
-// Handles both normalized types (from YAML parsing) and runtime types (from HTTP responses).
-// Normalized types: int64, float64
-// Runtime types: int, float32 (for compatibility with standard library)
+// toNumeric handles both YAML normalized types and HTTP response types.
 func toNumeric(value any) (float64, bool) {
 	switch v := value.(type) {
-	// Normalized types (from YAML parsing)
 	case int64:
 		return float64(v), true
 	case float64:
 		return v, true
-	// Runtime types (from HTTP responses, standard library, etc.)
 	case int:
 		return float64(v), true
 	case float32:
@@ -113,7 +100,6 @@ func toNumeric(value any) (float64, bool) {
 	}
 }
 
-// evaluateContains checks if actual contains the expected value.
 func evaluateContains(actual, expected any) (bool, error) {
 	actualStr := fmt.Sprintf("%v", actual)
 	expectedStr := fmt.Sprintf("%v", expected)
@@ -121,14 +107,12 @@ func evaluateContains(actual, expected any) (bool, error) {
 	return strings.Contains(actualStr, expectedStr), nil
 }
 
-// evaluateRegex checks if actual matches the expected regex pattern.
 func evaluateRegex(actual, expected any) (bool, error) {
 	pattern, ok := expected.(string)
 	if !ok {
 		return false, fmt.Errorf("%w: regex pattern must be string, got %T", ErrInvalidInput, expected)
 	}
 
-	// Compile the regex pattern each time (fine for CLI usage)
 	regex, err := regexp.Compile(pattern)
 	if err != nil {
 		return false, fmt.Errorf("%w: invalid regex pattern %s: %v", ErrInvalidInput, pattern, err)
@@ -138,7 +122,6 @@ func evaluateRegex(actual, expected any) (bool, error) {
 	return regex.MatchString(actualStr), nil
 }
 
-// evaluateExists checks if the actual value exists (not nil and not empty).
 func evaluateExists(actual any) bool {
 	if actual == nil {
 		return false
@@ -157,7 +140,6 @@ func evaluateExists(actual any) bool {
 	}
 }
 
-// evaluateLength checks if the actual value has the expected length.
 func evaluateLength(actual, expected any) (bool, error) {
 	expectedLen, err := convertToInt(expected)
 	if err != nil {
@@ -172,7 +154,6 @@ func evaluateLength(actual, expected any) (bool, error) {
 	return actualLen == expectedLen, nil
 }
 
-// getLength returns the length of the given value.
 func getLength(value any) (int, error) {
 	if value == nil {
 		return 0, nil
@@ -187,7 +168,6 @@ func getLength(value any) (int, error) {
 	}
 }
 
-// convertToInt converts normalized types to int.
 // Since the parser now normalizes all numeric types, we only need to handle:
 // - int64 (all integers are normalized to this)
 // - float64 (all floats are normalized to this)
@@ -205,8 +185,7 @@ func convertToInt(value any) (int, error) {
 	}
 }
 
-// EvaluateJSONPathParserPredicate evaluates a JSONPath predicate against JSON data.
-// This function bridges the parser package types with the evaluator.
+// EvaluateJSONPathParserPredicate bridges parser package types with evaluator.
 func EvaluateJSONPathParserPredicate(jsonData []byte, path string, predicate *parser.Predicate) (bool, error) {
 	if predicate == nil {
 		return false, fmt.Errorf("%w: predicate is nil", ErrInvalidInput)
@@ -245,7 +224,6 @@ func EvaluateJSONPathParserPredicate(jsonData []byte, path string, predicate *pa
 	return Evaluate(op, results[0], predicate.Value)
 }
 
-// GetSupportedOperations returns a list of supported predicate operations.
 func GetSupportedOperations() []string {
 	return []string{
 		string(OpEquals),
@@ -257,7 +235,6 @@ func GetSupportedOperations() []string {
 	}
 }
 
-// IsSupportedOperation checks if the given operation is supported.
 func IsSupportedOperation(operation string) bool {
 	_, err := ParseOperation(operation)
 	return err == nil
