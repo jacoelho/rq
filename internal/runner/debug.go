@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/jacoelho/rq/internal/results"
 	"github.com/jacoelho/rq/internal/sanitizer"
 )
 
@@ -31,7 +32,7 @@ func (r *Runner) debugRequest(req *http.Request, redactValues []any) {
 		return
 	}
 
-	if err := r.formatter.Debug("REQUEST", reqDump); err != nil {
+	if err := results.FormatDebug(results.FormatText, r.output, "REQUEST", reqDump); err != nil {
 		fmt.Printf("Error formatting debug request: %v\n", err)
 	}
 }
@@ -44,7 +45,7 @@ func (r *Runner) debugResponse(resp *http.Response, body []byte, redactValues []
 		return
 	}
 
-	if err := r.formatter.Debug("RESPONSE", respDump); err != nil {
+	if err := results.FormatDebug(results.FormatText, r.output, "RESPONSE", respDump); err != nil {
 		fmt.Printf("Error formatting debug response: %v\n", err)
 	}
 }

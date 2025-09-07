@@ -3,14 +3,13 @@ package runner
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/jacoelho/rq/internal/config"
 	"github.com/jacoelho/rq/internal/exit"
-	"github.com/jacoelho/rq/internal/formatter"
-	"github.com/jacoelho/rq/internal/formatter/stdout"
 	"github.com/jacoelho/rq/internal/parser"
 	"github.com/jacoelho/rq/internal/ratelimit"
 	"github.com/jacoelho/rq/internal/results"
@@ -22,7 +21,7 @@ type Runner struct {
 	variables   map[string]any
 	config      *config.Config
 	rateLimiter *ratelimit.Limiter
-	formatter   formatter.Formatter
+	output      io.Writer
 }
 
 // New creates a new Runner with the given configuration.
@@ -33,18 +32,20 @@ func New(cfg *config.Config) (*Runner, *exit.Result) {
 	}
 
 	rateLimiter := ratelimit.New(cfg.RateLimit)
-	formatter := stdout.New()
 
 	return &Runner{
 		client:      client,
 		variables:   cfg.AllVariables(),
 		config:      cfg,
 		rateLimiter: rateLimiter,
-		formatter:   formatter,
+		output:      os.Stdout,
 	}, nil
 }
 
-
+// SetOutput sets a custom writer for output. Used primarily for testing.
+func (r *Runner) SetOutput(w io.Writer) {
+	r.output = w
+}
 
 // Run executes the test files according to the configuration.
 func (r *Runner) Run(ctx context.Context) int {
@@ -78,7 +79,7 @@ func (r *Runner) runInfiniteLoop(ctx context.Context) int {
 
 		// Print results immediately for each iteration in infinite mode
 		if result != nil {
-			if err := r.formatter.Format(result); err != nil {
+			if err := result.Format(results.FormatText, r.output); err != nil {
 				fmt.Printf("Error formatting results: %v\n", err)
 			}
 		}
@@ -115,7 +116,7 @@ func (r *Runner) runFiniteLoop(ctx context.Context) int {
 		}
 	}
 
-	if err := r.formatter.Format(allResults...); err != nil {
+	if err := results.FormatAggregated(results.FormatText, r.output, allResults); err != nil {
 		fmt.Printf("Error formatting results: %v\n", err)
 	}
 	return 0

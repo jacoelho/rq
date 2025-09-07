@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jacoelho/rq/internal/config"
+	"github.com/jacoelho/rq/internal/extractor"
 	"github.com/jacoelho/rq/internal/parser"
 	"github.com/jacoelho/rq/internal/ratelimit"
 )
@@ -412,8 +414,6 @@ func TestExecuteCapturesErrorCases(t *testing.T) {
 }
 
 func TestExtractCertificateField(t *testing.T) {
-	runner := newDefault()
-
 	tests := []struct {
 		name          string
 		field         string
@@ -454,7 +454,7 @@ func TestExtractCertificateField(t *testing.T) {
 					},
 				}
 			},
-			expectError: true,
+			expectError: true, // Should expect an error for unsupported field
 		},
 		{
 			name:  "subject field",
@@ -503,19 +503,52 @@ func TestExtractCertificateField(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			resp := tt.setupResponse()
-			value, err := runner.extractCertificateField(tt.field, resp)
 
+			// Use the extractor package instead of the old method
+			certInfo, err := extractor.ExtractAllCertificateFields(resp)
+
+			// First check if extraction failed (for cases like no TLS or empty certs)
+			if err != nil {
+				if tt.expectError {
+					return // Expected error, test passes
+				} else {
+					t.Errorf("unexpected extraction error: %v", err)
+					return
+				}
+			}
+
+			// Extract the specific field value
+			var value any
+			var fieldErr error
+			switch tt.field {
+			case "subject":
+				value = certInfo.Subject
+			case "issuer":
+				value = certInfo.Issuer
+			case "expire_date":
+				value = certInfo.ExpireDate.Format("2006-01-02T15:04:05Z07:00")
+			case "serial_number":
+				value = certInfo.SerialNumber
+			default:
+				fieldErr = fmt.Errorf("unsupported certificate field: %s", tt.field)
+			}
+
+			// Check if we expected an error
 			if tt.expectError {
-				if err == nil {
-					t.Error("expected error, got nil")
+				if fieldErr == nil {
+					t.Error("expected error for unsupported field, got nil")
 				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
-				if tt.expectedValue != nil && value != tt.expectedValue {
-					t.Errorf("Expected value %v, got %v", tt.expectedValue, value)
-				}
+				return
+			}
+
+			// If we didn't expect an error but got one, that's a problem
+			if fieldErr != nil {
+				t.Errorf("unexpected field error: %v", fieldErr)
+				return
+			}
+
+			if tt.expectedValue != nil && value != tt.expectedValue {
+				t.Errorf("Expected value %v, got %v", tt.expectedValue, value)
 			}
 		})
 	}
