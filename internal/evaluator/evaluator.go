@@ -21,6 +21,7 @@ var (
 	ErrUnsupported  = errors.New("unsupported operation")
 )
 
+// regexCache stores compiled regex patterns to avoid repeated compilation overhead.
 var regexCache = struct {
 	sync.RWMutex
 	patterns map[string]*regexp.Regexp
@@ -73,7 +74,7 @@ func compilePattern(pattern string) (*regexp.Regexp, error) {
 
 	compiled, err := regexp.Compile(pattern)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to compile regex pattern %q: %w", pattern, err)
 	}
 
 	regexCache.Lock()
@@ -138,7 +139,7 @@ func numericEqual(actual, expected any) bool {
 	return false
 }
 
-// toNumeric handles both YAML normalized types and HTTP response types.
+// toNumeric converts numeric types to float64 for comparison.
 func toNumeric(value any) (float64, bool) {
 	switch v := value.(type) {
 	case int64:
@@ -374,7 +375,7 @@ func evaluateNotContains(actual, expected any) (bool, error) {
 	return !strings.Contains(actualStr, expectedStr), nil
 }
 
-// evaluateIn checks if actual value exists in expected collection (slice/array).
+// evaluateIn checks if actual value exists in expected collection.
 func evaluateIn(actual, expected any) (bool, error) {
 	var collection []any
 	switch v := expected.(type) {
@@ -396,7 +397,15 @@ func evaluateIn(actual, expected any) (bool, error) {
 			collection[i] = item
 		}
 	default:
-		return false, fmt.Errorf("%w: in operation requires a collection (slice/array), got %T", ErrInvalidInput, expected)
+		rv := reflect.ValueOf(expected)
+		if rv.Kind() == reflect.Slice || rv.Kind() == reflect.Array {
+			collection = make([]any, rv.Len())
+			for i := 0; i < rv.Len(); i++ {
+				collection[i] = rv.Index(i).Interface()
+			}
+		} else {
+			return false, fmt.Errorf("%w: in operation requires a collection (slice/array), got %T", ErrInvalidInput, expected)
+		}
 	}
 
 	for _, item := range collection {
