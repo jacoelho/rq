@@ -1,5 +1,5 @@
 - method: GET
-  url: https://httpbin.org/json
+  url: http://localhost:8080/json
   asserts:
     status:
       - op: equals
@@ -35,7 +35,7 @@
 
 # Use captured data in next request
 - method: POST
-  url: https://httpbin.org/post
+  url: http://localhost:8080/post
   headers:
     Content-Type: application/json
   body: |

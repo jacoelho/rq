@@ -378,6 +378,195 @@ func TestParse(t *testing.T) {
 				assertSingleStep(t, steps, "", "https://api.example.com/health")
 			},
 		},
+		{
+			name: "integer_value_parsing",
+			yaml: `
+- method: GET
+  url: https://api.example.com/health
+  asserts:
+    status:
+      - op: equals
+        value: 200
+`,
+			check: func(t *testing.T, steps []Step) {
+				s := steps[0]
+				if len(s.Asserts.Status) != 1 {
+					t.Fatalf("Expected 1 status assert, got %d", len(s.Asserts.Status))
+				}
+				predicate := s.Asserts.Status[0]
+				if predicate.Operation != "equals" {
+					t.Errorf("Expected operation 'equals', got %q", predicate.Operation)
+				}
+				if predicate.Value != int64(200) {
+					t.Errorf("Value = %v (%T), want int64(200)", predicate.Value, predicate.Value)
+				}
+			},
+		},
+		{
+			name: "large_integer_value_parsing",
+			yaml: `
+- method: GET
+  url: https://api.example.com/health
+  asserts:
+    status:
+      - op: equals
+        value: 9223372036854775807
+`,
+			check: func(t *testing.T, steps []Step) {
+				s := steps[0]
+				predicate := s.Asserts.Status[0]
+				if predicate.Value != int64(9223372036854775807) {
+					t.Errorf("Value = %v (%T), want int64(9223372036854775807)", predicate.Value, predicate.Value)
+				}
+			},
+		},
+		{
+			name: "negative_integer_value_parsing",
+			yaml: `
+- method: GET
+  url: https://api.example.com/health
+  asserts:
+    status:
+      - op: equals
+        value: -42
+`,
+			check: func(t *testing.T, steps []Step) {
+				s := steps[0]
+				predicate := s.Asserts.Status[0]
+				if predicate.Value != int64(-42) {
+					t.Errorf("Value = %v (%T), want int64(-42)", predicate.Value, predicate.Value)
+				}
+			},
+		},
+		{
+			name: "float_value_parsing",
+			yaml: `
+- method: GET
+  url: https://api.example.com/health
+  asserts:
+    status:
+      - op: equals
+        value: 3.14159
+`,
+			check: func(t *testing.T, steps []Step) {
+				s := steps[0]
+				predicate := s.Asserts.Status[0]
+				if predicate.Value != 3.14159 {
+					t.Errorf("Value = %v (%T), want 3.14159", predicate.Value, predicate.Value)
+				}
+			},
+		},
+		{
+			name: "string_value_parsing",
+			yaml: `
+- method: GET
+  url: https://api.example.com/health
+  asserts:
+    status:
+      - op: equals
+        value: "success"
+`,
+			check: func(t *testing.T, steps []Step) {
+				s := steps[0]
+				predicate := s.Asserts.Status[0]
+				if predicate.Value != "success" {
+					t.Errorf("Value = %v (%T), want 'success'", predicate.Value, predicate.Value)
+				}
+			},
+		},
+		{
+			name: "boolean_value_parsing",
+			yaml: `
+- method: GET
+  url: https://api.example.com/health
+  asserts:
+    status:
+      - op: equals
+        value: true
+`,
+			check: func(t *testing.T, steps []Step) {
+				s := steps[0]
+				predicate := s.Asserts.Status[0]
+				if predicate.Value != true {
+					t.Errorf("Value = %v (%T), want true", predicate.Value, predicate.Value)
+				}
+			},
+		},
+		{
+			name: "null_value_parsing",
+			yaml: `
+- method: GET
+  url: https://api.example.com/health
+  asserts:
+    status:
+      - op: equals
+        value: null
+`,
+			check: func(t *testing.T, steps []Step) {
+				s := steps[0]
+				predicate := s.Asserts.Status[0]
+				if predicate.Value != nil {
+					t.Errorf("Value = %v (%T), want nil", predicate.Value, predicate.Value)
+				}
+			},
+		},
+		{
+			name: "array_value_parsing",
+			yaml: `
+- method: GET
+  url: https://api.example.com/health
+  asserts:
+    status:
+      - op: equals
+        value: [1, 2, 3]
+`,
+			check: func(t *testing.T, steps []Step) {
+				s := steps[0]
+				predicate := s.Asserts.Status[0]
+				expected := []any{int64(1), int64(2), int64(3)}
+				if !compareSlices(predicate.Value.([]any), expected) {
+					t.Errorf("Value = %v, want %v", predicate.Value, expected)
+				}
+			},
+		},
+		{
+			name: "mixed_array_value_parsing",
+			yaml: `
+- method: GET
+  url: https://api.example.com/health
+  asserts:
+    status:
+      - op: equals
+        value: ["hello", 42, 3.14, true, null]
+`,
+			check: func(t *testing.T, steps []Step) {
+				s := steps[0]
+				predicate := s.Asserts.Status[0]
+				expected := []any{"hello", int64(42), 3.14, true, nil}
+				if !compareSlices(predicate.Value.([]any), expected) {
+					t.Errorf("Value = %v, want %v", predicate.Value, expected)
+				}
+			},
+		},
+		{
+			name: "nested_array_value_parsing",
+			yaml: `
+- method: GET
+  url: https://api.example.com/health
+  asserts:
+    status:
+      - op: equals
+        value: [[1, 2], [3, 4]]
+`,
+			check: func(t *testing.T, steps []Step) {
+				s := steps[0]
+				predicate := s.Asserts.Status[0]
+				expected := []any{[]any{int64(1), int64(2)}, []any{int64(3), int64(4)}}
+				if !compareSlices(predicate.Value.([]any), expected) {
+					t.Errorf("Value = %v, want %v", predicate.Value, expected)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -727,4 +916,26 @@ func TestCertificateAssertMissingField(t *testing.T) {
 	if !strings.Contains(err.Error(), expectedError) {
 		t.Errorf("Expected error containing %q, got %q", expectedError, err.Error())
 	}
+}
+
+// compareSlices compares two []any slices for equality
+func compareSlices(a, b []any) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		// Handle nested slices recursively
+		if aSlice, ok := a[i].([]any); ok {
+			if bSlice, ok := b[i].([]any); ok {
+				if !compareSlices(aSlice, bSlice) {
+					return false
+				}
+			} else {
+				return false
+			}
+		} else if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

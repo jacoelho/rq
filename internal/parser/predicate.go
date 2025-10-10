@@ -4,44 +4,42 @@ import (
 	"errors"
 	"fmt"
 
-	yaml "github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
 )
 
-// normalizeNumericType converts all numeric types to a consistent representation.
-// This eliminates the unpredictability of YAML parsing that can produce various
-// numeric types (int, int64, uint64, float64) for the same value.
-func normalizeNumericType(value any) any {
-	switch v := value.(type) {
-	// Normalize all integer types to int64
-	case int:
-		return int64(v)
-	case int8:
-		return int64(v)
-	case int16:
-		return int64(v)
-	case int32:
-		return int64(v)
-	case int64:
-		return v // Already normalized
-	case uint:
-		return int64(v)
-	case uint8:
-		return int64(v)
-	case uint16:
-		return int64(v)
-	case uint32:
-		return int64(v)
-	case uint64:
-		return int64(v) // Note: Potential overflow, but matches original behavior
-	// Normalize all float types to float64
-	case float32:
-		return float64(v)
-	case float64:
-		return v // Already normalized
-	// Keep other types as-is
+// nodeToValue extracts values from AST nodes.
+// integer node value is normalized to int64
+// float node value is always float64
+func nodeToValue(node ast.Node) (any, error) {
+	switch n := node.(type) {
+	case *ast.IntegerNode:
+		if v, ok := n.Value.(int64); ok {
+			return v, nil
+		}
+		if v, ok := n.Value.(uint64); ok {
+			return int64(v), nil
+		}
+		return nil, fmt.Errorf("unexpected integer node value type: %T", n.Value)
+	case *ast.FloatNode:
+		return n.Value, nil
+	case *ast.StringNode:
+		return n.Value, nil
+	case *ast.BoolNode:
+		return n.Value, nil
+	case *ast.NullNode:
+		return nil, nil
+	case *ast.SequenceNode:
+		var result []any
+		for _, item := range n.Values {
+			val, err := nodeToValue(item)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, val)
+		}
+		return result, nil
 	default:
-		return value
+		return nil, fmt.Errorf("unsupported node type: %T", node)
 	}
 }
 
@@ -78,20 +76,19 @@ func (p *Predicate) UnmarshalYAML(node ast.Node) error {
 			}
 			p.Operation = opNode.Value
 		case "value":
-			// Parse the value
-			if err := yaml.NodeToValue(valNode.Value, &p.Value); err != nil {
+			value, err := nodeToValue(valNode.Value)
+			if err != nil {
 				return fmt.Errorf("failed to parse value: %w", err)
 			}
-			// Normalize numeric types for consistency
-			p.Value = normalizeNumericType(p.Value)
+			p.Value = value
 		default:
 			// Handle direct operation format (e.g., "equals": "test")
 			p.Operation = key.Value
-			if err := yaml.NodeToValue(valNode.Value, &p.Value); err != nil {
+			value, err := nodeToValue(valNode.Value)
+			if err != nil {
 				return fmt.Errorf("failed to parse value for %q: %w", key.Value, err)
 			}
-			// Normalize numeric types for consistency
-			p.Value = normalizeNumericType(p.Value)
+			p.Value = value
 		}
 	}
 

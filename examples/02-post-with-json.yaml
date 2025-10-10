@@ -1,5 +1,5 @@
 - method: POST
-  url: https://httpbin.org/post
+  url: http://localhost:8080/post
   headers:
     Content-Type: application/json
   body: |

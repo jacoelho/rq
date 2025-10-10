@@ -1,6 +1,6 @@
 # Test with retries on a flaky endpoint
 - method: GET
-  url: https://httpbin.org/status/503
+  url: http://localhost:8080/status/503
   options:
     retries: 3
     follow_redirect: false
@@ -11,7 +11,7 @@
 
 # Test redirect following
 - method: GET
-  url: https://httpbin.org/redirect-to?url=https://httpbin.org/get
+  url: http://localhost:8080/redirect-to?url=http://localhost:8080/get
   options:
     follow_redirect: true
   asserts:
@@ -21,11 +21,11 @@
     jsonpath:
       - path: $.url
         op: equals
-        value: "https://httpbin.org/get"
+        value: "http://localhost:8080/get"
 
 # Test without following redirects
 - method: GET
-  url: https://httpbin.org/redirect-to?url=https://httpbin.org/get
+  url: http://localhost:8080/redirect-to?url=http://localhost:8080/get
   options:
     follow_redirect: false
   asserts:
@@ -35,7 +35,7 @@
 
 # Test absolute redirect
 - method: GET
-  url: https://httpbin.org/absolute-redirect/2
+  url: http://localhost:8080/absolute-redirect/2
   options:
     follow_redirect: true
   asserts:
@@ -45,7 +45,7 @@
 
 # Test relative redirect
 - method: GET
-  url: https://httpbin.org/relative-redirect/1
+  url: http://localhost:8080/relative-redirect/1
   options:
     follow_redirect: true
   asserts:

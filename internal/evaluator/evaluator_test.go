@@ -20,6 +20,14 @@ func TestParseOperation(t *testing.T) {
 		{"regex", "regex", OpRegex, false},
 		{"exists", "exists", OpExists, false},
 		{"length", "length", OpLength, false},
+		{"greater_than", "greater_than", OpGreaterThan, false},
+		{"less_than", "less_than", OpLessThan, false},
+		{"greater_than_or_equal", "greater_than_or_equal", OpGreaterThanOrEqual, false},
+		{"less_than_or_equal", "less_than_or_equal", OpLessThanOrEqual, false},
+		{"starts_with", "starts_with", OpStartsWith, false},
+		{"ends_with", "ends_with", OpEndsWith, false},
+		{"not_contains", "not_contains", OpNotContains, false},
+		{"in", "in", OpIn, false},
 		{"unsupported", "unsupported", "", true},
 		{"empty", "", "", true},
 	}
@@ -92,6 +100,57 @@ func TestEvaluate(t *testing.T) {
 		// Error cases
 		{"length invalid expected", OpLength, "test", "not_int", false, true},
 		{"length invalid actual", OpLength, int64(42), int64(2), false, true},
+
+		// Numeric comparison tests
+		{"greater_than int64", OpGreaterThan, int64(5), int64(3), true, false},
+		{"greater_than float64", OpGreaterThan, float64(5.5), float64(3.2), true, false},
+		{"greater_than mixed types", OpGreaterThan, int64(5), float64(3.5), true, false},
+		{"greater_than false", OpGreaterThan, int64(3), int64(5), false, false},
+		{"greater_than equal", OpGreaterThan, int64(5), int64(5), false, false},
+		{"greater_than non-numeric", OpGreaterThan, "test", int64(5), false, true},
+
+		{"less_than int64", OpLessThan, int64(3), int64(5), true, false},
+		{"less_than float64", OpLessThan, float64(3.2), float64(5.5), true, false},
+		{"less_than mixed types", OpLessThan, int64(3), float64(5.5), true, false},
+		{"less_than false", OpLessThan, int64(5), int64(3), false, false},
+		{"less_than equal", OpLessThan, int64(5), int64(5), false, false},
+		{"less_than non-numeric", OpLessThan, "test", int64(5), false, true},
+
+		{"greater_than_or_equal int64", OpGreaterThanOrEqual, int64(5), int64(3), true, false},
+		{"greater_than_or_equal equal", OpGreaterThanOrEqual, int64(5), int64(5), true, false},
+		{"greater_than_or_equal false", OpGreaterThanOrEqual, int64(3), int64(5), false, false},
+		{"greater_than_or_equal non-numeric", OpGreaterThanOrEqual, "test", int64(5), false, true},
+
+		{"less_than_or_equal int64", OpLessThanOrEqual, int64(3), int64(5), true, false},
+		{"less_than_or_equal equal", OpLessThanOrEqual, int64(5), int64(5), true, false},
+		{"less_than_or_equal false", OpLessThanOrEqual, int64(5), int64(3), false, false},
+		{"less_than_or_equal non-numeric", OpLessThanOrEqual, "test", int64(5), false, true},
+
+		// String operation tests
+		{"starts_with match", OpStartsWith, "hello world", "hello", true, false},
+		{"starts_with no match", OpStartsWith, "hello world", "world", false, false},
+		{"starts_with empty prefix", OpStartsWith, "hello world", "", true, false},
+		{"starts_with empty string", OpStartsWith, "", "hello", false, false},
+
+		{"ends_with match", OpEndsWith, "hello world", "world", true, false},
+		{"ends_with no match", OpEndsWith, "hello world", "hello", false, false},
+		{"ends_with empty suffix", OpEndsWith, "hello world", "", true, false},
+		{"ends_with empty string", OpEndsWith, "", "world", false, false},
+
+		{"not_contains match", OpNotContains, "hello world", "xyz", true, false},
+		{"not_contains no match", OpNotContains, "hello world", "hello", false, false},
+		{"not_contains empty string", OpNotContains, "hello world", "", false, false},
+		{"not_contains empty actual", OpNotContains, "", "hello", true, false},
+
+		// Collection operation tests
+		{"in string slice", OpIn, "apple", []string{"apple", "banana", "orange"}, true, false},
+		{"in string slice not found", OpIn, "grape", []string{"apple", "banana", "orange"}, false, false},
+		{"in int64 slice", OpIn, int64(2), []int64{1, 2, 3}, true, false},
+		{"in int64 slice not found", OpIn, int64(4), []int64{1, 2, 3}, false, false},
+		{"in float64 slice", OpIn, float64(2.5), []float64{1.5, 2.5, 3.5}, true, false},
+		{"in any slice", OpIn, "test", []any{"hello", "test", "world"}, true, false},
+		{"in empty slice", OpIn, "test", []string{}, false, false},
+		{"in non-collection", OpIn, "test", "not_a_slice", false, true},
 	}
 
 	for _, tt := range tests {
@@ -249,7 +308,11 @@ func TestEvaluateJSONPathParserPredicate(t *testing.T) {
 
 func TestGetSupportedOperations(t *testing.T) {
 	operations := GetSupportedOperations()
-	expected := []string{"equals", "not_equals", "contains", "regex", "exists", "length"}
+	expected := []string{
+		"equals", "not_equals", "contains", "regex", "exists", "length",
+		"greater_than", "less_than", "greater_than_or_equal", "less_than_or_equal",
+		"starts_with", "ends_with", "not_contains", "in",
+	}
 
 	if len(operations) != len(expected) {
 		t.Errorf("GetSupportedOperations() length = %d, want %d", len(operations), len(expected))
@@ -274,6 +337,14 @@ func TestIsSupportedOperation(t *testing.T) {
 		{"regex", true},
 		{"exists", true},
 		{"length", true},
+		{"greater_than", true},
+		{"less_than", true},
+		{"greater_than_or_equal", true},
+		{"less_than_or_equal", true},
+		{"starts_with", true},
+		{"ends_with", true},
+		{"not_contains", true},
+		{"in", true},
 		{"unsupported", false},
 		{"", false},
 	}
@@ -299,6 +370,14 @@ func TestOperationString(t *testing.T) {
 		{OpRegex, "regex"},
 		{OpExists, "exists"},
 		{OpLength, "length"},
+		{OpGreaterThan, "greater_than"},
+		{OpLessThan, "less_than"},
+		{OpGreaterThanOrEqual, "greater_than_or_equal"},
+		{OpLessThanOrEqual, "less_than_or_equal"},
+		{OpStartsWith, "starts_with"},
+		{OpEndsWith, "ends_with"},
+		{OpNotContains, "not_contains"},
+		{OpIn, "in"},
 	}
 
 	for _, tt := range tests {

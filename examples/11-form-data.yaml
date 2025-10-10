@@ -1,6 +1,6 @@
 # POST form data
 - method: POST
-  url: https://httpbin.org/post
+  url: http://localhost:8080/post
   headers:
     Content-Type: application/x-www-form-urlencoded
   body: "name=John+Doe&email=john%40example.com&age=30&newsletter=on"
@@ -28,7 +28,7 @@
 
 # PUT with form data
 - method: PUT
-  url: https://httpbin.org/put
+  url: http://localhost:8080/put
   headers:
     Content-Type: application/x-www-form-urlencoded
   body: "action=update&id=123&status=active"
@@ -49,7 +49,7 @@
 
 # PATCH with form data
 - method: PATCH
-  url: https://httpbin.org/patch
+  url: http://localhost:8080/patch
   headers:
     Content-Type: application/x-www-form-urlencoded
   body: "field=value&timestamp={{timestamp}}"
