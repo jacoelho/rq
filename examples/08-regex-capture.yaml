@@ -1,5 +1,5 @@
 - method: GET
-  url: https://httpbin.org/html
+  url: http://localhost:8080/html
   asserts:
     status:
       - op: equals
@@ -27,7 +27,7 @@
 
 # Use extracted data in next request
 - method: POST
-  url: https://httpbin.org/post
+  url: http://localhost:8080/post
   headers:
     Content-Type: application/json
   body: |

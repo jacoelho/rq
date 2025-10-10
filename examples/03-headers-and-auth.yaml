@@ -1,5 +1,5 @@
 - method: GET
-  url: https://httpbin.org/headers
+  url: http://localhost:8080/headers
   headers:
     User-Agent: rq-tool/1.0
     X-Custom-Header: test-value

@@ -1,6 +1,6 @@
 # Basic query parameters
 - method: GET
-  url: https://httpbin.org/get
+  url: http://localhost:8080/get
   query:
     search: Install Linux
     order: newest
@@ -26,7 +26,7 @@
 
 # Query parameters with template variables (using captured values from previous step)
 - method: GET
-  url: https://httpbin.org/get
+  url: http://localhost:8080/get
   query:
     user_id: "{{uuidv4}}"
     timestamp: "{{timestamp}}"
@@ -52,7 +52,7 @@
 
 # Query parameters with existing URL parameters
 - method: GET
-  url: https://httpbin.org/get?existing=value&fixed=param
+  url: http://localhost:8080/get?existing=value&fixed=param
   query:
     search: Install Linux
     order: newest
@@ -82,7 +82,7 @@
 
 # POST request with query parameters
 - method: POST
-  url: https://httpbin.org/post
+  url: http://localhost:8080/post
   query:
     action: create
     version: v1

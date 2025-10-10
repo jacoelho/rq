@@ -1,6 +1,6 @@
 # First request: Get a UUID from httpbin
 - method: GET
-  url: https://httpbin.org/uuid
+  url: http://localhost:8080/uuid
   asserts:
     status:
       - op: equals
@@ -15,7 +15,7 @@
 
 # Second request: Use the captured UUID in another request
 - method: POST
-  url: https://httpbin.org/post
+  url: http://localhost:8080/post
   headers:
     Content-Type: application/json
   body: |

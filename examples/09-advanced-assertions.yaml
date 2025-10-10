@@ -1,5 +1,5 @@
 - method: GET
-  url: https://httpbin.org/user-agent
+  url: http://localhost:8080/user-agent
   headers:
     User-Agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
   asserts:
@@ -38,7 +38,7 @@
 
 # Test with delay endpoint to check response time expectations
 - method: GET
-  url: https://httpbin.org/delay/2
+  url: http://localhost:8080/delay/2
   asserts:
     status:
       - op: equals
@@ -50,7 +50,7 @@
 
 # Test with different content types
 - method: GET
-  url: https://httpbin.org/xml
+  url: http://localhost:8080/xml
   asserts:
     status:
       - op: equals

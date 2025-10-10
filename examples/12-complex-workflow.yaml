@@ -1,6 +1,6 @@
 # Step 1: Get initial data and generate session info
 - method: GET
-  url: https://httpbin.org/uuid
+  url: http://localhost:8080/uuid
   asserts:
     status:
       - op: equals
@@ -12,7 +12,7 @@
 
 # Step 2: Login simulation with session
 - method: POST
-  url: https://httpbin.org/post
+  url: http://localhost:8080/post
   headers:
     Content-Type: application/json
     X-Session-ID: "{{.session_id}}"
@@ -50,7 +50,7 @@
 
 # Step 3: Get user profile with session
 - method: GET
-  url: https://httpbin.org/get?user_id=123&include_details=true
+  url: http://localhost:8080/get?user_id=123&include_details=true
   headers:
     Authorization: "{{.auth_header}}"
     X-Session-ID: "{{.session_id}}"
@@ -75,7 +75,7 @@
 
 # Step 4: Update user data
 - method: PUT
-  url: https://httpbin.org/put
+  url: http://localhost:8080/put
   headers:
     Content-Type: application/json
     Authorization: "{{.auth_header}}"
@@ -114,7 +114,7 @@
 
 # Step 5: Logout and cleanup
 - method: POST
-  url: https://httpbin.org/post
+  url: http://localhost:8080/post
   headers:
     Content-Type: application/json
     Authorization: "{{.auth_header}}"
