@@ -13,6 +13,9 @@ import (
 func nodeToValue(node ast.Node) (any, error) {
 	switch n := node.(type) {
 	case *ast.IntegerNode:
+		if n.Value == nil {
+			return nil, errors.New("integer node has nil value")
+		}
 		if v, ok := n.Value.(int64); ok {
 			return v, nil
 		}
@@ -30,10 +33,10 @@ func nodeToValue(node ast.Node) (any, error) {
 		return nil, nil
 	case *ast.SequenceNode:
 		var result []any
-		for _, item := range n.Values {
+		for i, item := range n.Values {
 			val, err := nodeToValue(item)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("invalid value at index %d: %w", i, err)
 			}
 			result = append(result, val)
 		}
