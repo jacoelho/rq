@@ -13,13 +13,16 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/jacoelho/rq/internal/config"
 	"github.com/jacoelho/rq/internal/extractor"
 	"github.com/jacoelho/rq/internal/parser"
-	"github.com/jacoelho/rq/internal/ratelimit"
+	"github.com/jacoelho/rq/internal/spec"
+	"golang.org/x/time/rate"
 )
 
 func newDefault() *Runner {
@@ -28,7 +31,7 @@ func newDefault() *Runner {
 			Timeout: 30 * time.Second,
 		},
 		variables:   make(map[string]any),
-		rateLimiter: ratelimit.New(0),
+		rateLimiter: rate.NewLimiter(rate.Inf, 1),
 	}
 }
 
@@ -863,8 +866,6 @@ func TestExecuteStepRetriesWithTemplateError(t *testing.T) {
 func TestValidateStep(t *testing.T) {
 	t.Parallel()
 
-	runner := newDefault()
-
 	tests := []struct {
 		name        string
 		step        parser.Step
@@ -985,7 +986,7 @@ func TestValidateStep(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := runner.validateStep(tt.step)
+			err := spec.ValidateStep(tt.step)
 
 			if tt.expectError && err == nil {
 				t.Error("Expected error but got none")
@@ -997,6 +998,40 @@ func TestValidateStep(t *testing.T) {
 				t.Errorf("Expected error to contain %q, got: %v", tt.errorText, err)
 			}
 		})
+	}
+}
+
+func TestExecuteFiles_ValidatesBeforeExecution(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "invalid.yaml")
+
+	content := `
+- method: TRACE
+  url: https://api.example.com/health
+`
+	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	runner := newDefault()
+	summary, err := runner.ExecuteFiles(context.Background(), []string{testFile})
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+
+	if summary == nil {
+		t.Fatal("expected non-nil summary")
+	}
+	if summary.ExecutedRequests != 0 {
+		t.Fatalf("expected 0 executed requests, got %d", summary.ExecutedRequests)
+	}
+	if summary.FailedFiles != 1 {
+		t.Fatalf("expected 1 failed file, got %d", summary.FailedFiles)
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte("failed to validate file")) {
+		t.Fatalf("expected validation boundary error, got: %v", err)
 	}
 }
 

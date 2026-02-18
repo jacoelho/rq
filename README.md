@@ -55,17 +55,20 @@ rq [options] <file1.yaml> [file2.yaml...]
 
 | Flag                  | Description                                      |
 |-----------------------|--------------------------------------------------|
-| `--debug`             | Show request/response debug output               |
+| `--debug`             | Show request/response debug output (stderr)      |
 | `--secret NAME=VALUE` | Provide secret (can be used multiple times)      |
 | `--secret-file FILE`  | Load secrets from file                           |
 | `--secret-salt SALT`  | Salt for secret redaction hashes                 |
 | `--rate-limit N`      | Requests per second (0 = unlimited)              |
+| `--output FORMAT`     | Output format: `text` or `json`                  |
 | `--repeat N`          | Repeat test N times (negative = infinite)        |
 | `--insecure`          | Skip TLS verification                            |
 | `--cacert FILE`       | Custom CA certificate                            |
 | `--timeout DURATION`  | Request timeout (default: 30s)                   |
 | `-h, --help`          | Show help                                        |
 | `-v, --version`       | Show version                                     |
+
+When using `--output text` or `--output json`, formatted result payloads are written to stdout. Operational/errors logs and `--debug` request/response payloads are written to stderr.
 
 ---
 
@@ -246,7 +249,7 @@ Chain requests and use captured data:
 
 ## Debugging and Secret Redaction
 
-- Run with `--debug` to see request/response details.
+- Run with `--debug` to see request/response details on stderr.
 - Secrets and redacted captures are replaced with `[S256:xxxxxxxxxxxxxxxx]` in debug output.
 - The real values are still used for requests and variable substitution.
 

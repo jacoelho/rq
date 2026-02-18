@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jacoelho/rq/internal/exit"
+	"github.com/jacoelho/rq/internal/results"
 )
 
 const (
@@ -32,6 +33,7 @@ var (
 	ErrEmptySecretName       = errors.New("secret name cannot be empty")
 	ErrInvalidVariableFormat = errors.New("variable must be in format name=value")
 	ErrEmptyVariableName     = errors.New("variable name cannot be empty")
+	ErrInvalidOutputFormat   = errors.New("output format must be one of: text, json")
 )
 
 type Config struct {
@@ -43,6 +45,7 @@ type Config struct {
 	CACertFile     string
 	RequestTimeout time.Duration
 	RateLimit      float64 // Requests per second (0 = unlimited)
+	OutputFormat   results.OutputFormat
 
 	Secrets    map[string]any
 	SecretFile string
@@ -106,56 +109,45 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// secretsFlag implements flag.Value for parsing multiple -secret flags.
-type secretsFlag map[string]any
+type keyValueFlag struct {
+	values        map[string]any
+	invalidFormat error
+	emptyName     error
+}
 
-func (s secretsFlag) String() string {
+func newKeyValueFlag(invalidFormat, emptyName error) *keyValueFlag {
+	return &keyValueFlag{
+		values:        make(map[string]any),
+		invalidFormat: invalidFormat,
+		emptyName:     emptyName,
+	}
+}
+
+func (f *keyValueFlag) String() string {
 	var pairs []string
-	for k, v := range s {
+	for k, v := range f.values {
 		pairs = append(pairs, fmt.Sprintf("%s=%v", k, v))
 	}
 	return strings.Join(pairs, ",")
 }
 
-func (s secretsFlag) Set(value string) error {
+func (f *keyValueFlag) Set(value string) error {
 	parts := strings.SplitN(value, "=", 2)
 	if len(parts) != 2 {
-		return fmt.Errorf("%w, got: %s", ErrInvalidSecretFormat, value)
+		return fmt.Errorf("%w, got: %s", f.invalidFormat, value)
 	}
 
 	name := strings.TrimSpace(parts[0])
 	if name == "" {
-		return ErrEmptySecretName
+		return f.emptyName
 	}
 
-	s[name] = parts[1]
+	f.values[name] = parts[1]
 	return nil
 }
 
-// variablesFlag implements flag.Value for parsing multiple -variable flags.
-type variablesFlag map[string]any
-
-func (v variablesFlag) String() string {
-	var pairs []string
-	for k, val := range v {
-		pairs = append(pairs, fmt.Sprintf("%s=%v", k, val))
-	}
-	return strings.Join(pairs, ",")
-}
-
-func (v variablesFlag) Set(value string) error {
-	parts := strings.SplitN(value, "=", 2)
-	if len(parts) != 2 {
-		return fmt.Errorf("%w, got: %s", ErrInvalidVariableFormat, value)
-	}
-
-	name := strings.TrimSpace(parts[0])
-	if name == "" {
-		return ErrEmptyVariableName
-	}
-
-	v[name] = parts[1]
-	return nil
+func (f *keyValueFlag) Values() map[string]any {
+	return f.values
 }
 
 func Parse(args []string) (*Config, *exit.Result) {
@@ -175,12 +167,13 @@ func Parse(args []string) (*Config, *exit.Result) {
 		repeat       = fs.Int("repeat", 0, "Number of additional times to repeat test execution after the first run (negative for infinite loop)")
 		insecure     = fs.Bool("insecure", false, "Skip TLS certificate verification")
 		caCertFile   = fs.String("cacert", "", "Path to CA certificate file for TLS verification")
-		secrets      = make(secretsFlag)
+		secrets      = newKeyValueFlag(ErrInvalidSecretFormat, ErrEmptySecretName)
 		secretFile   = fs.String("secret-file", "", "Path to key=value file containing secrets")
-		variables    = make(variablesFlag)
+		variables    = newKeyValueFlag(ErrInvalidVariableFormat, ErrEmptyVariableName)
 		variableFile = fs.String("variable-file", "", "Path to key=value file containing template variables")
 		timeout      = fs.Duration("timeout", DefaultTimeout, "HTTP request timeout")
 		rateLimit    = fs.Float64("rate-limit", 0, "Rate limit in requests per second (0 for unlimited)")
+		output       = fs.String("output", "text", "Output format: text or json")
 		secretSalt   = fs.String("secret-salt", timeNow().Format("2006-01-02"), "Salt to use for secret redaction hashes (default: current date)")
 	)
 
@@ -200,34 +193,20 @@ func Parse(args []string) (*Config, *exit.Result) {
 		return nil, exit.Errorf("Error: %v\n\n%s", ErrNoTestFiles, Usage())
 	}
 
-	// Load variables with proper precedence: file variables first, then command-line variables
-	var finalVariables map[string]any
-	if *variableFile != "" {
-		fileVariables, err := loadVariableFile(*variableFile)
-		if err != nil {
-			return nil, exit.Errorf("Error: failed to load variable file: %v\n\n%s", err, Usage())
-		}
-		finalVariables = make(map[string]any)
-		maps.Copy(finalVariables, fileVariables)
+	finalVariables, err := mergeVariables(*variableFile, variables.Values())
+	if err != nil {
+		return nil, exit.Errorf("Error: failed to load variable file: %v\n\n%s", err, Usage())
 	}
 
-	// Command-line variables take precedence over file variables
-	if len(variables) > 0 {
-		if finalVariables == nil {
-			finalVariables = make(map[string]any)
-		}
-		maps.Copy(finalVariables, variables)
+	finalSecrets, err := mergeSecrets(*secretFile, secrets.Values())
+	if err != nil {
+		return nil, exit.Errorf("Error: failed to load secret file: %v\n\n%s", err, Usage())
 	}
 
-	finalSecrets := make(map[string]any)
-	if *secretFile != "" {
-		fileSecrets, err := loadVariableFile(*secretFile)
-		if err != nil {
-			return nil, exit.Errorf("Error: failed to load secret file: %v\n\n%s", err, Usage())
-		}
-		maps.Copy(finalSecrets, fileSecrets)
+	outputFormat, err := parseOutputFormat(*output)
+	if err != nil {
+		return nil, exit.Errorf("Error: %v\n\n%s", err, Usage())
 	}
-	maps.Copy(finalSecrets, secrets)
 
 	config := &Config{
 		TestFiles:      files,
@@ -237,6 +216,7 @@ func Parse(args []string) (*Config, *exit.Result) {
 		CACertFile:     *caCertFile,
 		RequestTimeout: *timeout,
 		RateLimit:      *rateLimit,
+		OutputFormat:   outputFormat,
 		Secrets:        finalSecrets,
 		SecretFile:     *secretFile,
 		Variables:      finalVariables,
@@ -250,8 +230,60 @@ func Parse(args []string) (*Config, *exit.Result) {
 	return config, nil
 }
 
+func mergeVariables(variableFile string, cliVariables map[string]any) (map[string]any, error) {
+	var merged map[string]any
+
+	if variableFile != "" {
+		fileVariables, err := loadKeyValueFile(variableFile)
+		if err != nil {
+			return nil, err
+		}
+		merged = make(map[string]any)
+		maps.Copy(merged, fileVariables)
+	}
+
+	if len(cliVariables) > 0 {
+		if merged == nil {
+			merged = make(map[string]any)
+		}
+		maps.Copy(merged, cliVariables)
+	}
+
+	return merged, nil
+}
+
+func mergeSecrets(secretFile string, cliSecrets map[string]any) (map[string]any, error) {
+	merged := make(map[string]any)
+
+	if secretFile != "" {
+		fileSecrets, err := loadKeyValueFile(secretFile)
+		if err != nil {
+			return nil, err
+		}
+		maps.Copy(merged, fileSecrets)
+	}
+
+	maps.Copy(merged, cliSecrets)
+	return merged, nil
+}
+
+func parseOutputFormat(input string) (results.OutputFormat, error) {
+	switch strings.ToLower(strings.TrimSpace(input)) {
+	case "text", "":
+		return results.FormatText, nil
+	case "json":
+		return results.FormatJSON, nil
+	default:
+		return results.FormatText, fmt.Errorf("%w, got: %s", ErrInvalidOutputFormat, input)
+	}
+}
+
 // loadVariableFile loads variables from key=value format with comment support.
 func loadVariableFile(filename string) (map[string]any, error) {
+	return loadKeyValueFile(filename)
+}
+
+func loadKeyValueFile(filename string) (map[string]any, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file %s: %w", filename, err)
@@ -297,6 +329,7 @@ Options:
   --cacert FILE           Path to CA certificate file for TLS verification
   --timeout DURATION      HTTP request timeout (default: 30s)
   --rate-limit N          Rate limit in requests per second (0 for unlimited)
+  --output FORMAT         Output format: text or json (default: text)
   --secret NAME=VALUE     Secret in format name=value (can be used multiple times)
   --secret-file FILE      Path to key=value file containing secrets
   --secret-salt SALT      Salt to use for secret redaction hashes (default: current date)

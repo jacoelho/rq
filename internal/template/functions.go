@@ -17,7 +17,7 @@ func FuncMap() template.FuncMap {
 		"uuidv4": generateUUIDv4,
 		"uuid":   generateUUIDv4, // Alias for uuidv4
 
-		"now":       timeNow,
+		"now":       timeRFC3339,
 		"timestamp": timeUnix,
 		"iso8601":   timeISO8601,
 		"rfc3339":   timeRFC3339,
@@ -36,10 +36,6 @@ func FuncMap() template.FuncMap {
 
 func generateUUIDv4() string {
 	return uuid.New().String()
-}
-
-func timeNow() string {
-	return time.Now().Format(time.RFC3339)
 }
 
 func timeUnix() string {

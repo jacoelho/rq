@@ -1,3 +1,8 @@
+# disable default rules
+.SUFFIXES:
+MAKEFLAGS+=-r -R
+DATE  = $(shell date +%Y%m%d%H%M%S)
+export GOBIN = $(CURDIR)/bin
 BINARY_NAME=rq
 EXAMPLES_DIR=examples
 CURL_HEALTH_CHECK=curl --connect-timeout 5 --max-time 10 --retry 5 --retry-delay 0 --retry-max-time 40 --retry-all-errors -s
@@ -10,8 +15,12 @@ build:
 test:
 	go test ./...
 
-staticcheck:
-	staticcheck ./...
+$(GOBIN)/staticcheck:
+	go install honnef.co/go/tools/cmd/staticcheck@latest
+
+.PHONY: staticcheck
+staticcheck: $(GOBIN)/staticcheck
+	$(GOBIN)/staticcheck ./...
 
 httpbin:
 	@if docker ps -a --format '{{.Names}}' | grep -q '^httpbin$$'; then \

@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jacoelho/rq/internal/results"
 )
 
 // generateTestCertificate creates a self-signed certificate for testing purposes
@@ -300,6 +302,23 @@ func TestParse(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "with_json_output",
+			args: []string{"rq", "--output", "json", testFile1},
+			want: &Config{
+				TestFiles:      []string{testFile1},
+				Repeat:         0,
+				Insecure:       false,
+				CACertFile:     "",
+				RequestTimeout: DefaultTimeout,
+				RateLimit:      0,
+				OutputFormat:   results.FormatJSON,
+				Secrets:        map[string]any{},
+				Variables:      nil,
+				SecretSalt:     "2025-07-05",
+			},
+			wantErr: false,
+		},
+		{
 			name:    "no_arguments",
 			args:    []string{},
 			want:    nil,
@@ -368,6 +387,12 @@ func TestParse(t *testing.T) {
 		{
 			name:    "invalid_rate_limit",
 			args:    []string{"rq", "--rate-limit", "invalid", testFile1},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name:    "invalid_output_format",
+			args:    []string{"rq", "--output", "xml", testFile1},
 			want:    nil,
 			wantErr: true,
 		},
@@ -559,17 +584,17 @@ func TestSecretsFlag(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			secrets := make(secretsFlag)
+			secrets := newKeyValueFlag(ErrInvalidSecretFormat, ErrEmptySecretName)
 			for _, value := range tt.values {
 				err := secrets.Set(value)
 				if (err != nil) != tt.wantErr {
-					t.Errorf("secretsFlag.Set() error = %v, wantErr %v", err, tt.wantErr)
+					t.Errorf("keyValueFlag(Set secret) error = %v, wantErr %v", err, tt.wantErr)
 					return
 				}
 			}
 
-			if !tt.wantErr && !reflect.DeepEqual(map[string]any(secrets), tt.want) {
-				t.Errorf("secretsFlag = %v, want %v", secrets, tt.want)
+			if !tt.wantErr && !reflect.DeepEqual(secrets.Values(), tt.want) {
+				t.Errorf("secrets values = %v, want %v", secrets.Values(), tt.want)
 			}
 		})
 	}
@@ -994,17 +1019,17 @@ func TestVariablesFlag(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			variables := make(variablesFlag)
+			variables := newKeyValueFlag(ErrInvalidVariableFormat, ErrEmptyVariableName)
 			for _, value := range tt.values {
 				err := variables.Set(value)
 				if (err != nil) != tt.wantErr {
-					t.Errorf("variablesFlag.Set() error = %v, wantErr %v", err, tt.wantErr)
+					t.Errorf("keyValueFlag(Set variable) error = %v, wantErr %v", err, tt.wantErr)
 					return
 				}
 			}
 
-			if !tt.wantErr && !reflect.DeepEqual(map[string]any(variables), tt.want) {
-				t.Errorf("variablesFlag = %v, want %v", variables, tt.want)
+			if !tt.wantErr && !reflect.DeepEqual(variables.Values(), tt.want) {
+				t.Errorf("variable values = %v, want %v", variables.Values(), tt.want)
 			}
 		})
 	}

@@ -11,43 +11,6 @@ type FileResult struct {
 	Error        error
 }
 
-type FileResultBuilder struct {
-	filename     string
-	requestCount int
-	duration     time.Duration
-	err          error
-}
-
-func NewFileResultBuilder(filename string) *FileResultBuilder {
-	return &FileResultBuilder{
-		filename: filename,
-	}
-}
-
-func (b *FileResultBuilder) WithRequestCount(count int) *FileResultBuilder {
-	b.requestCount = count
-	return b
-}
-
-func (b *FileResultBuilder) WithDuration(duration time.Duration) *FileResultBuilder {
-	b.duration = duration
-	return b
-}
-
-func (b *FileResultBuilder) WithError(err error) *FileResultBuilder {
-	b.err = err
-	return b
-}
-
-func (b *FileResultBuilder) Build() FileResult {
-	return FileResult{
-		Filename:     b.filename,
-		RequestCount: b.requestCount,
-		Duration:     b.duration,
-		Error:        b.err,
-	}
-}
-
 type Summary struct {
 	FileResults      []FileResult
 	ExecutedFiles    int
@@ -63,9 +26,7 @@ func NewSummary(expectedFiles int) *Summary {
 	}
 }
 
-func (s *Summary) Add(builder *FileResultBuilder) {
-	result := builder.Build()
-
+func (s *Summary) Add(result FileResult) {
 	s.FileResults = append(s.FileResults, result)
 	s.ExecutedFiles++
 	s.ExecutedRequests += result.RequestCount
@@ -129,4 +90,48 @@ func CalculateAggregatedStats(allResults []*Summary) AggregatedStats {
 	}
 
 	return stats
+}
+
+func (s AggregatedStats) FailedIterations() int {
+	return s.IterationCount - s.SuccessfulIterations
+}
+
+func (s AggregatedStats) IterationSuccessRate() float64 {
+	if s.IterationCount == 0 {
+		return 0
+	}
+
+	return float64(s.SuccessfulIterations) / float64(s.IterationCount) * 100
+}
+
+func (s AggregatedStats) OverallRequestsPerSecond() float64 {
+	if s.TotalDuration <= 0 {
+		return 0
+	}
+
+	return float64(s.TotalExecutedRequests) / s.TotalDuration.Seconds()
+}
+
+func (s AggregatedStats) AvgFilesPerIteration() float64 {
+	if s.IterationCount == 0 {
+		return 0
+	}
+
+	return float64(s.TotalExecutedFiles) / float64(s.IterationCount)
+}
+
+func (s AggregatedStats) AvgRequestsPerIteration() float64 {
+	if s.IterationCount == 0 {
+		return 0
+	}
+
+	return float64(s.TotalExecutedRequests) / float64(s.IterationCount)
+}
+
+func (s AggregatedStats) AvgDurationPerIteration() time.Duration {
+	if s.IterationCount == 0 {
+		return 0
+	}
+
+	return s.TotalDuration / time.Duration(s.IterationCount)
 }

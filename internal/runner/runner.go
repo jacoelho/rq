@@ -11,16 +11,18 @@ import (
 	"github.com/jacoelho/rq/internal/config"
 	"github.com/jacoelho/rq/internal/exit"
 	"github.com/jacoelho/rq/internal/parser"
-	"github.com/jacoelho/rq/internal/ratelimit"
 	"github.com/jacoelho/rq/internal/results"
+	"github.com/jacoelho/rq/internal/spec"
+	"golang.org/x/time/rate"
 )
 
 type Runner struct {
 	client      *http.Client
 	variables   map[string]any
 	config      *config.Config
-	rateLimiter *ratelimit.Limiter
+	rateLimiter *rate.Limiter
 	output      io.Writer
+	errOutput   io.Writer
 }
 
 func New(cfg *config.Config) (*Runner, *exit.Result) {
@@ -29,19 +31,48 @@ func New(cfg *config.Config) (*Runner, *exit.Result) {
 		return nil, exit.Errorf("Error creating runner: %v\n", err)
 	}
 
-	rateLimiter := ratelimit.New(cfg.RateLimit)
-
 	return &Runner{
 		client:      client,
 		variables:   cfg.AllVariables(),
 		config:      cfg,
-		rateLimiter: rateLimiter,
+		rateLimiter: newRateLimiter(cfg.RateLimit),
 		output:      os.Stdout,
+		errOutput:   os.Stderr,
 	}, nil
+}
+
+func newRateLimiter(requestsPerSecond float64) *rate.Limiter {
+	if requestsPerSecond <= 0 {
+		return rate.NewLimiter(rate.Inf, 1)
+	}
+
+	return rate.NewLimiter(rate.Limit(requestsPerSecond), 1)
 }
 
 func (r *Runner) SetOutput(w io.Writer) {
 	r.output = w
+}
+
+func (r *Runner) SetErrorOutput(w io.Writer) {
+	r.errOutput = w
+}
+
+func (r *Runner) payloadWriter() io.Writer {
+	if r.output == nil {
+		return io.Discard
+	}
+	return r.output
+}
+
+func (r *Runner) errorWriter() io.Writer {
+	if r.errOutput == nil {
+		return io.Discard
+	}
+	return r.errOutput
+}
+
+func (r *Runner) logf(format string, args ...any) {
+	_, _ = fmt.Fprintf(r.errorWriter(), format, args...)
 }
 
 func (r *Runner) Run(ctx context.Context) int {
@@ -57,24 +88,24 @@ func (r *Runner) runInfiniteLoop(ctx context.Context) int {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("\nInterrupted after %d iterations\n", iteration-1)
+			r.logf("\nInterrupted after %d iterations\n", iteration-1)
 			return 1
 		default:
 		}
 
 		if r.config.Debug {
-			fmt.Printf("--- Iteration %d ---\n", iteration)
+			r.logf("--- Iteration %d ---\n", iteration)
 		}
 
 		result, err := r.runOnce(ctx)
 		if err != nil {
-			fmt.Printf("\nError in iteration %d: %v\n", iteration, err)
+			r.logf("\nError in iteration %d: %v\n", iteration, err)
 			return 1
 		}
 
 		if result != nil {
-			if err := result.Format(results.FormatText, r.output); err != nil {
-				fmt.Printf("Error formatting results: %v\n", err)
+			if err := result.Format(r.config.OutputFormat, r.payloadWriter()); err != nil {
+				r.logf("Error formatting results: %v\n", err)
 			}
 		}
 
@@ -89,18 +120,18 @@ func (r *Runner) runFiniteLoop(ctx context.Context) int {
 	for i := 1; i <= totalIterations; i++ {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("\nInterrupted after %d of %d iterations\n", i-1, totalIterations)
+			r.logf("\nInterrupted after %d of %d iterations\n", i-1, totalIterations)
 			return 1
 		default:
 		}
 
 		if r.config.Debug && totalIterations > 1 {
-			fmt.Printf("--- Iteration %d of %d ---\n", i, totalIterations)
+			r.logf("--- Iteration %d of %d ---\n", i, totalIterations)
 		}
 
 		result, err := r.runOnce(ctx)
 		if err != nil {
-			fmt.Printf("\nError in iteration %d: %v\n", i, err)
+			r.logf("\nError in iteration %d: %v\n", i, err)
 			return 1
 		}
 
@@ -109,8 +140,8 @@ func (r *Runner) runFiniteLoop(ctx context.Context) int {
 		}
 	}
 
-	if err := results.FormatAggregated(results.FormatText, r.output, allResults); err != nil {
-		fmt.Printf("Error formatting results: %v\n", err)
+	if err := results.FormatAggregated(r.config.OutputFormat, r.payloadWriter(), allResults); err != nil {
+		r.logf("Error formatting results: %v\n", err)
 	}
 	return 0
 }
@@ -136,10 +167,12 @@ func (r *Runner) ExecuteFiles(ctx context.Context, files []string) (*results.Sum
 		requestCount, err := r.executeFile(ctx, filename)
 		duration := time.Since(start)
 
-		s.Add(results.NewFileResultBuilder(filename).
-			WithRequestCount(requestCount).
-			WithDuration(duration).
-			WithError(err))
+		s.Add(results.FileResult{
+			Filename:     filename,
+			RequestCount: requestCount,
+			Duration:     duration,
+			Error:        err,
+		})
 
 		if err != nil && firstError == nil {
 			firstError = err
@@ -160,6 +193,9 @@ func (r *Runner) executeFile(ctx context.Context, filename string) (int, error) 
 	steps, err := parser.Parse(file)
 	if err != nil {
 		return 0, fmt.Errorf("failed to parse file %s: %w", filename, err)
+	}
+	if err := spec.ValidateSteps(steps); err != nil {
+		return 0, fmt.Errorf("failed to validate file %s: %w", filename, err)
 	}
 
 	captures := initializeCaptures(r.variables)

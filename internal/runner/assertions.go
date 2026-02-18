@@ -7,6 +7,7 @@ import (
 	"github.com/jacoelho/rq/internal/evaluator"
 	"github.com/jacoelho/rq/internal/extractor"
 	"github.com/jacoelho/rq/internal/parser"
+	"github.com/jacoelho/rq/internal/predicate"
 )
 
 // executeAssertions validates all assertions against the HTTP response.
@@ -27,129 +28,112 @@ func (r *Runner) executeAssertions(asserts parser.Asserts, resp *http.Response, 
 		return err
 	}
 
-	// XPath assertions not yet implemented
-	for _, assert := range asserts.XPath {
-		return fmt.Errorf("XPath assertions not yet implemented: %s", assert.Path)
-	}
-
 	return nil
 }
 
-// executeStatusAssertions validates status code assertions
+// executeStatusAssertions validates status code assertions.
 func (r *Runner) executeStatusAssertions(asserts []parser.StatusAssert, resp *http.Response) error {
 	for _, assert := range asserts {
-		statusCode, err := extractor.ExtractStatusCode(resp)
+		actual, err := extractor.ExtractStatusCode(resp)
 		if err != nil {
 			return fmt.Errorf("status extraction failed: %w", err)
 		}
 
-		op, err := evaluator.ParseOperation(assert.Predicate.Operation)
-		if err != nil {
-			return fmt.Errorf("invalid status operation: %w", err)
-		}
-
-		result, err := evaluator.Evaluate(op, statusCode, assert.Predicate.Value)
+		ok, err := evaluateAssertion(actual, assert.Predicate)
 		if err != nil {
 			return fmt.Errorf("status assertion error: %w", err)
 		}
-		if !result {
-			return fmt.Errorf("status assertion failed: expected %s %v, got %d", assert.Predicate.Operation, assert.Predicate.Value, statusCode)
+		if !ok {
+			return fmt.Errorf("status assertion failed: expected %s %v, got %v", assert.Predicate.Operation, assert.Predicate.Value, actual)
 		}
 	}
+
 	return nil
 }
 
-// executeHeaderAssertions validates header assertions
+// executeHeaderAssertions validates header assertions.
 func (r *Runner) executeHeaderAssertions(asserts []parser.HeaderAssert, resp *http.Response) error {
 	for _, assert := range asserts {
-		headerValue, err := extractor.ExtractHeader(resp, assert.Name)
-		if err != nil && !extractor.IsNotFound(err) {
-			return fmt.Errorf("header extraction failed for %s: %w", assert.Name, err)
-		}
-		// If header not found, use empty string for assertion
-		if extractor.IsNotFound(err) {
-			headerValue = ""
-		}
-
-		op, err := evaluator.ParseOperation(assert.Predicate.Operation)
+		actual, err := extractor.ExtractHeader(resp, assert.Name)
 		if err != nil {
-			return fmt.Errorf("invalid header operation: %w", err)
+			if extractor.IsNotFound(err) {
+				actual = ""
+			} else {
+				return fmt.Errorf("header extraction failed for %s: %w", assert.Name, err)
+			}
 		}
 
-		result, err := evaluator.Evaluate(op, headerValue, assert.Predicate.Value)
+		ok, err := evaluateAssertion(actual, assert.Predicate)
 		if err != nil {
 			return fmt.Errorf("header assertion error: %w", err)
 		}
-		if !result {
-			return fmt.Errorf("header %s assertion failed: expected %s %v, got %s", assert.Name, assert.Predicate.Operation, assert.Predicate.Value, headerValue)
+		if !ok {
+			return fmt.Errorf("header %s assertion failed: expected %s %v, got %v", assert.Name, assert.Predicate.Operation, assert.Predicate.Value, actual)
 		}
 	}
+
 	return nil
 }
 
-// executeCertificateAssertions validates certificate assertions
+// executeCertificateAssertions validates certificate assertions.
 func (r *Runner) executeCertificateAssertions(asserts []parser.CertificateAssert, resp *http.Response) error {
 	for _, assert := range asserts {
-		if err := r.executeCertificateAssertion(assert, resp); err != nil {
-			return err
+		actual, err := extractor.ExtractCertificateField(resp, assert.Name)
+		if err != nil {
+			return fmt.Errorf("certificate assertion failed for field %s: %w", assert.Name, err)
+		}
+
+		ok, err := evaluateAssertion(actual, assert.Predicate)
+		if err != nil {
+			return fmt.Errorf("certificate assertion error: %w", err)
+		}
+		if !ok {
+			return fmt.Errorf("certificate %s assertion failed: expected %s %v, got %v", assert.Name, assert.Predicate.Operation, assert.Predicate.Value, actual)
 		}
 	}
+
 	return nil
 }
 
-// executeJSONPathAssertions validates JSONPath assertions
+// executeJSONPathAssertions validates JSONPath assertions.
 func (r *Runner) executeJSONPathAssertions(asserts []parser.JSONPathAssert, body []byte) error {
 	for _, assert := range asserts {
-		result, err := evaluator.EvaluateJSONPathParserPredicate(body, assert.Path, &parser.Predicate{
-			Operation: assert.Predicate.Operation,
-			Value:     assert.Predicate.Value,
-		})
+		actual, err := extractor.ExtractJSONPath(body, assert.Path)
+		if err != nil {
+			actual, err = resolveJSONPathAssertionValue(assert, err)
+			if err != nil {
+				return err
+			}
+		}
+
+		ok, err := evaluateAssertion(actual, assert.Predicate)
 		if err != nil {
 			return fmt.Errorf("JSONPath assertion failed for %s: %w", assert.Path, err)
 		}
-
-		if !result {
+		if !ok {
 			return fmt.Errorf("JSONPath assertion failed for %s: expected %s %v, but condition was not met", assert.Path, assert.Predicate.Operation, assert.Predicate.Value)
 		}
 	}
+
 	return nil
 }
 
-// executeCertificateAssertion handles certificate assertions.
-func (r *Runner) executeCertificateAssertion(assert parser.CertificateAssert, resp *http.Response) error {
-	// Extract all certificate fields using the extractor package
-	certInfo, err := extractor.ExtractAllCertificateFields(resp)
-	if err != nil {
-		return fmt.Errorf("certificate assertion failed for field %s: %w", assert.Name, err)
+func evaluateAssertion(actual any, predicateInput parser.Predicate) (bool, error) {
+	return evaluator.Evaluate(actual, predicateInput)
+}
+
+func resolveJSONPathAssertionValue(assert parser.JSONPathAssert, err error) (any, error) {
+	if !extractor.IsNotFound(err) {
+		return nil, fmt.Errorf("JSONPath assertion failed for %s: %w", assert.Path, err)
 	}
 
-	// Get the specific field value
-	var value any
-	switch assert.Name {
-	case "subject":
-		value = certInfo.Subject
-	case "issuer":
-		value = certInfo.Issuer
-	case "expire_date":
-		value = certInfo.ExpireDate.Format("2006-01-02T15:04:05Z07:00")
-	case "serial_number":
-		value = certInfo.SerialNumber
-	default:
-		return fmt.Errorf("unsupported certificate field: %s (supported: subject, issuer, expire_date, serial_number)", assert.Name)
+	op, opErr := predicate.ParseOperator(assert.Predicate.Operation)
+	if opErr != nil {
+		return nil, fmt.Errorf("JSONPath assertion failed for %s: %w", assert.Path, opErr)
+	}
+	if op != predicate.OpExists {
+		return nil, fmt.Errorf("JSONPath assertion failed for %s: selector returned no value", assert.Path)
 	}
 
-	op, err := evaluator.ParseOperation(assert.Predicate.Operation)
-	if err != nil {
-		return fmt.Errorf("invalid certificate operation: %w", err)
-	}
-
-	result, err := evaluator.Evaluate(op, value, assert.Predicate.Value)
-	if err != nil {
-		return fmt.Errorf("certificate assertion error: %w", err)
-	}
-	if !result {
-		return fmt.Errorf("certificate %s assertion failed: expected %s %v, got %v", assert.Name, assert.Predicate.Operation, assert.Predicate.Value, value)
-	}
-
-	return nil
+	return nil, nil
 }

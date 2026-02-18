@@ -208,9 +208,11 @@ func TestNewSummary(t *testing.T) {
 func TestSummary_AddFileResult_Migration(t *testing.T) {
 	summary := NewSummary(2)
 
-	summary.Add(NewFileResultBuilder("success.yaml").
-		WithRequestCount(3).
-		WithDuration(time.Second))
+	summary.Add(FileResult{
+		Filename:     "success.yaml",
+		RequestCount: 3,
+		Duration:     time.Second,
+	})
 
 	if len(summary.FileResults) != 1 {
 		t.Errorf("After adding 1 result, FileResults length = %v, want 1", len(summary.FileResults))
@@ -228,10 +230,12 @@ func TestSummary_AddFileResult_Migration(t *testing.T) {
 		t.Errorf("After adding 1 successful result, FailedFiles = %v, want 0", summary.FailedFiles)
 	}
 
-	summary.Add(NewFileResultBuilder("fail.yaml").
-		WithRequestCount(2).
-		WithDuration(time.Second).
-		WithError(errors.New("test error")))
+	summary.Add(FileResult{
+		Filename:     "fail.yaml",
+		RequestCount: 2,
+		Duration:     time.Second,
+		Error:        errors.New("test error"),
+	})
 
 	if len(summary.FileResults) != 2 {
 		t.Errorf("After adding 2 results, FileResults length = %v, want 2", len(summary.FileResults))
@@ -261,76 +265,14 @@ func TestSummary_SetTotalDuration(t *testing.T) {
 	}
 }
 
-func TestFileResultBuilder(t *testing.T) {
-	filename := "test.yaml"
-	requestCount := 5
-	duration := 2 * time.Second
-	err := errors.New("test error")
-
-	result := NewFileResultBuilder(filename).
-		WithRequestCount(requestCount).
-		WithDuration(duration).
-		WithError(err).
-		Build()
-
-	if result.Filename != filename {
-		t.Errorf("FileResultBuilder.Build().Filename = %v, want %v", result.Filename, filename)
-	}
-	if result.RequestCount != requestCount {
-		t.Errorf("FileResultBuilder.Build().RequestCount = %v, want %v", result.RequestCount, requestCount)
-	}
-	if result.Duration != duration {
-		t.Errorf("FileResultBuilder.Build().Duration = %v, want %v", result.Duration, duration)
-	}
-	if result.Error != err {
-		t.Errorf("FileResultBuilder.Build().Error = %v, want %v", result.Error, err)
-	}
-}
-
-func TestFileResultBuilder_PartialFields(t *testing.T) {
-	filename := "test.yaml"
-	requestCount := 3
-
-	result := NewFileResultBuilder(filename).
-		WithRequestCount(requestCount).
-		Build()
-
-	if result.Filename != filename {
-		t.Errorf("FileResultBuilder.Build().Filename = %v, want %v", result.Filename, filename)
-	}
-	if result.RequestCount != requestCount {
-		t.Errorf("FileResultBuilder.Build().RequestCount = %v, want %v", result.RequestCount, requestCount)
-	}
-	if result.Duration != 0 {
-		t.Errorf("FileResultBuilder.Build().Duration = %v, want 0", result.Duration)
-	}
-	if result.Error != nil {
-		t.Errorf("FileResultBuilder.Build().Error = %v, want nil", result.Error)
-	}
-}
-
-func TestFileResultBuilder_FluentInterface(t *testing.T) {
-	filename := "test.yaml"
-
-	builder := NewFileResultBuilder(filename)
-
-	if builder.WithRequestCount(5) != builder {
-		t.Error("WithRequestCount() should return the same builder instance")
-	}
-	if builder.WithDuration(time.Second) != builder {
-		t.Error("WithDuration() should return the same builder instance")
-	}
-	if builder.WithError(errors.New("test")) != builder {
-		t.Error("WithError() should return the same builder instance")
-	}
-}
-
 func TestSummary_Add(t *testing.T) {
 	summary := NewSummary(2)
 
-	summary.Add(NewFileResultBuilder("success.yaml").
-		WithRequestCount(3).
-		WithDuration(time.Second))
+	summary.Add(FileResult{
+		Filename:     "success.yaml",
+		RequestCount: 3,
+		Duration:     time.Second,
+	})
 
 	if len(summary.FileResults) != 1 {
 		t.Errorf("After adding 1 result, FileResults length = %v, want 1", len(summary.FileResults))
@@ -348,10 +290,12 @@ func TestSummary_Add(t *testing.T) {
 		t.Errorf("After adding 1 successful result, FailedFiles = %v, want 0", summary.FailedFiles)
 	}
 
-	summary.Add(NewFileResultBuilder("fail.yaml").
-		WithRequestCount(2).
-		WithDuration(time.Second).
-		WithError(errors.New("test error")))
+	summary.Add(FileResult{
+		Filename:     "fail.yaml",
+		RequestCount: 2,
+		Duration:     time.Second,
+		Error:        errors.New("test error"),
+	})
 
 	if len(summary.FileResults) != 2 {
 		t.Errorf("After adding 2 results, FileResults length = %v, want 2", len(summary.FileResults))

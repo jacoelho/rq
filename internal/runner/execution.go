@@ -6,42 +6,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 
 	"github.com/jacoelho/rq/internal/parser"
 	"github.com/jacoelho/rq/internal/template"
 )
 
-// validateStep validates the step configuration before execution.
-func (r *Runner) validateStep(step parser.Step) error {
-	if step.Method == "" {
-		return fmt.Errorf("step method cannot be empty")
-	}
-
-	validMethods := []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
-	isValidMethod := slices.Contains(validMethods, step.Method)
-	if !isValidMethod {
-		return fmt.Errorf("unsupported HTTP method: %s", step.Method)
-	}
-
-	if step.URL == "" {
-		return fmt.Errorf("step URL cannot be empty")
-	}
-
-	if step.Options.Retries < 0 {
-		return fmt.Errorf("retries must be >= 0, got: %d", step.Options.Retries)
-	}
-
-	return nil
-}
-
 // executeStep executes a single HTTP request step with retry logic.
 func (r *Runner) executeStep(ctx context.Context, step parser.Step, captures map[string]CaptureValue) (bool, error) {
-	if err := r.validateStep(step); err != nil {
-		return false, fmt.Errorf("invalid step configuration: %w", err)
-	}
-
 	maxAttempts := max(step.Options.Retries+1, 1)
 
 	var lastErr error
@@ -55,7 +27,7 @@ func (r *Runner) executeStep(ctx context.Context, step parser.Step, captures map
 		}
 
 		if r.config != nil && r.config.Debug && attempt > 1 {
-			fmt.Printf("Retry attempt %d of %d\n", attempt-1, step.Options.Retries)
+			r.logf("Retry attempt %d of %d\n", attempt-1, step.Options.Retries)
 		}
 
 		attemptRequestMade, err := r.executeStepAttempt(ctx, step, captures)
@@ -79,81 +51,28 @@ func (r *Runner) executeStep(ctx context.Context, step parser.Step, captures map
 
 // executeStepAttempt executes a single attempt of an HTTP request step.
 func (r *Runner) executeStepAttempt(ctx context.Context, step parser.Step, captures map[string]CaptureValue) (bool, error) {
-	tmplVars := captureMapForTemplate(captures)
-
-	requestURL, err := template.Apply(step.URL, tmplVars)
+	req, err := prepareRequest(ctx, step, captures)
 	if err != nil {
-		return false, fmt.Errorf("failed to process URL template: %w", err)
+		return false, err
 	}
 
-	if len(step.Query) > 0 {
-		requestURL, err = processQueryParameters(requestURL, step.Query, tmplVars)
-		if err != nil {
-			return false, fmt.Errorf("failed to process query parameters: %w", err)
-		}
-	}
-
-	body, err := template.Apply(step.Body, tmplVars)
-	if err != nil {
-		return false, fmt.Errorf("failed to process body template: %w", err)
-	}
-
-	var bodyReader io.Reader
-	if body != "" {
-		bodyReader = strings.NewReader(body)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, step.Method, requestURL, bodyReader)
-	if err != nil {
-		return false, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	for name, value := range step.Headers {
-		processedValue, err := template.Apply(value, tmplVars)
-		if err != nil {
-			return false, fmt.Errorf("failed to process header %s: %w", name, err)
-		}
-		req.Header.Set(name, processedValue)
-	}
-
-	var staticSecrets map[string]any
-	if r.config != nil {
-		staticSecrets = r.config.Secrets
-	}
+	staticSecrets := r.staticSecrets()
 	valuesToRedact := redactValues(captures, staticSecrets)
-
 	if r.config != nil && r.config.Debug {
 		r.debugRequest(req, valuesToRedact)
 	}
 
-	if err := r.rateLimiter.Wait(ctx); err != nil {
-		return false, fmt.Errorf("rate limiting interrupted: %w", err)
-	}
-
-	client := r.getClient(step.Options)
-
-	resp, err := client.Do(req)
+	resp, respBody, err := r.executeRequest(ctx, step.Options, req)
 	if err != nil {
-		return true, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return true, fmt.Errorf("failed to read response body: %w", err)
+		return true, err
 	}
 
-	if err := r.executeAssertions(step.Asserts, resp, respBody); err != nil {
-		return true, fmt.Errorf("assertion failed: %w", err)
+	if err := r.processStepResponse(step, resp, respBody, captures); err != nil {
+		return true, err
 	}
-
-	if err := r.executeCaptures(step.Captures, resp, respBody, captures); err != nil {
-		return true, fmt.Errorf("capture failed: %w", err)
-	}
-
-	valuesToRedact = redactValues(captures, staticSecrets)
 
 	if r.config != nil && r.config.Debug {
+		valuesToRedact = redactValues(captures, staticSecrets)
 		r.debugResponse(resp, respBody, valuesToRedact)
 	}
 
@@ -180,6 +99,102 @@ func captureMapForTemplate(captures map[string]CaptureValue) map[string]any {
 		m[k] = v.Value
 	}
 	return m
+}
+
+func prepareRequest(ctx context.Context, step parser.Step, captures map[string]CaptureValue) (*http.Request, error) {
+	tmplVars := captureMapForTemplate(captures)
+
+	requestURL, err := template.Apply(step.URL, tmplVars)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process URL template: %w", err)
+	}
+
+	if len(step.Query) > 0 {
+		requestURL, err = processQueryParameters(requestURL, step.Query, tmplVars)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process query parameters: %w", err)
+		}
+	}
+
+	body, err := template.Apply(step.Body, tmplVars)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process body template: %w", err)
+	}
+
+	req, err := newHTTPRequest(ctx, step.Method, requestURL, body)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := applyTemplatedHeaders(req, step.Headers, tmplVars); err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+func newHTTPRequest(ctx context.Context, method string, requestURL string, body string) (*http.Request, error) {
+	var bodyReader io.Reader
+	if body != "" {
+		bodyReader = strings.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, requestURL, bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	return req, nil
+}
+
+func applyTemplatedHeaders(req *http.Request, headers map[string]string, templateVars map[string]any) error {
+	for name, value := range headers {
+		processedValue, err := template.Apply(value, templateVars)
+		if err != nil {
+			return fmt.Errorf("failed to process header %s: %w", name, err)
+		}
+		req.Header.Set(name, processedValue)
+	}
+
+	return nil
+}
+
+func (r *Runner) executeRequest(ctx context.Context, options parser.Options, req *http.Request) (*http.Response, []byte, error) {
+	if err := r.rateLimiter.Wait(ctx); err != nil {
+		return nil, nil, fmt.Errorf("rate limiting interrupted: %w", err)
+	}
+
+	resp, err := r.getClient(options).Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	return resp, respBody, nil
+}
+
+func (r *Runner) processStepResponse(step parser.Step, resp *http.Response, respBody []byte, captures map[string]CaptureValue) error {
+	if err := r.executeAssertions(step.Asserts, resp, respBody); err != nil {
+		return fmt.Errorf("assertion failed: %w", err)
+	}
+
+	if err := r.executeCaptures(step.Captures, resp, respBody, captures); err != nil {
+		return fmt.Errorf("capture failed: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Runner) staticSecrets() map[string]any {
+	if r.config == nil {
+		return nil
+	}
+	return r.config.Secrets
 }
 
 // processQueryParameters processes query parameters from a step and appends them to the given URL.

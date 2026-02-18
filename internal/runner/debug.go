@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"fmt"
 	"net/http"
 
 	"github.com/jacoelho/rq/internal/results"
@@ -28,12 +27,12 @@ func redactValues(captures map[string]CaptureValue, staticSecrets map[string]any
 func (r *Runner) debugRequest(req *http.Request, redactValues []any) {
 	reqDump, err := sanitizer.DumpRequestRedacted(req, redactValues, r.config.SecretSalt)
 	if err != nil {
-		fmt.Printf("Error dumping request: %v\n", err)
+		r.logf("Error dumping request: %v\n", err)
 		return
 	}
 
-	if err := results.FormatDebug(results.FormatText, r.output, "REQUEST", reqDump); err != nil {
-		fmt.Printf("Error formatting debug request: %v\n", err)
+	if err := results.FormatDebug(r.config.OutputFormat, r.errorWriter(), "REQUEST", reqDump); err != nil {
+		r.logf("Error formatting debug request: %v\n", err)
 	}
 }
 
@@ -41,11 +40,11 @@ func (r *Runner) debugRequest(req *http.Request, redactValues []any) {
 func (r *Runner) debugResponse(resp *http.Response, body []byte, redactValues []any) {
 	respDump, err := sanitizer.DumpResponseRedacted(resp, body, redactValues, r.config.SecretSalt)
 	if err != nil {
-		fmt.Printf("Error dumping response: %v\n", err)
+		r.logf("Error dumping response: %v\n", err)
 		return
 	}
 
-	if err := results.FormatDebug(results.FormatText, r.output, "RESPONSE", respDump); err != nil {
-		fmt.Printf("Error formatting debug response: %v\n", err)
+	if err := results.FormatDebug(r.config.OutputFormat, r.errorWriter(), "RESPONSE", respDump); err != nil {
+		r.logf("Error formatting debug response: %v\n", err)
 	}
 }

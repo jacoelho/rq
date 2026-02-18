@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+const (
+	CertificateFieldSubject      = "subject"
+	CertificateFieldIssuer       = "issuer"
+	CertificateFieldExpireDate   = "expire_date"
+	CertificateFieldSerialNumber = "serial_number"
+)
+
 type CertificateInfo struct {
 	Subject      string    `json:"subject"`
 	Issuer       string    `json:"issuer"`
@@ -31,4 +38,24 @@ func ExtractAllCertificateFields(resp *http.Response) (*CertificateInfo, error) 
 		ExpireDate:   cert.NotAfter,
 		SerialNumber: cert.SerialNumber.String(),
 	}, nil
+}
+
+func ExtractCertificateField(resp *http.Response, field string) (any, error) {
+	certInfo, err := ExtractAllCertificateFields(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	switch field {
+	case CertificateFieldSubject:
+		return certInfo.Subject, nil
+	case CertificateFieldIssuer:
+		return certInfo.Issuer, nil
+	case CertificateFieldExpireDate:
+		return certInfo.ExpireDate.Format(time.RFC3339), nil
+	case CertificateFieldSerialNumber:
+		return certInfo.SerialNumber, nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported certificate field: %s", ErrInvalidInput, field)
+	}
 }

@@ -57,13 +57,6 @@ type JSONPathAssert struct {
 	Predicate Predicate `yaml:",inline"`
 }
 
-// XPathAssert represents an assertion on an XPath expression.
-// It allows validation of specific data extracted from XML response content.
-type XPathAssert struct {
-	Path      string    `yaml:"path"`
-	Predicate Predicate `yaml:",inline"`
-}
-
 // StatusCapture represents a capture of the HTTP status code.
 type StatusCapture struct {
 	Name   string `yaml:"name"`
@@ -112,7 +105,6 @@ type Asserts struct {
 	Headers     []HeaderAssert      `yaml:"headers,omitempty"`
 	Certificate []CertificateAssert `yaml:"certificate,omitempty"`
 	JSONPath    []JSONPathAssert    `yaml:"jsonpath,omitempty"`
-	XPath       []XPathAssert       `yaml:"xpath,omitempty"`
 }
 
 // Captures groups all supported capture types for a step.
@@ -166,13 +158,6 @@ func (h *HeaderCapture) UnmarshalYAML(node ast.Node) error {
 		}
 	}
 
-	if h.Name == "" {
-		return fmt.Errorf("%w: HeaderCapture: missing required 'name' field", ErrParser)
-	}
-	if h.HeaderName == "" {
-		return fmt.Errorf("%w: HeaderCapture: missing required 'header_name' field", ErrParser)
-	}
-
 	return nil
 }
 
@@ -184,11 +169,6 @@ func (c *CertificateAssert) UnmarshalYAML(node ast.Node) error {
 // UnmarshalYAML implements custom YAML unmarshaling for JSONPathAssert.
 func (p *JSONPathAssert) UnmarshalYAML(node ast.Node) error {
 	return unmarshalAssertWithField(node, "path", &p.Path, &p.Predicate, "JSONPathAssert")
-}
-
-// UnmarshalYAML implements custom YAML unmarshaling for XPathAssert.
-func (x *XPathAssert) UnmarshalYAML(node ast.Node) error {
-	return unmarshalAssertWithField(node, "path", &x.Path, &x.Predicate, "XPathAssert")
 }
 
 // unmarshalAssertWithField is a helper function to reduce code duplication.
@@ -220,18 +200,12 @@ func unmarshalAssertWithField(node ast.Node, fieldName string, fieldValue *strin
 		}
 	}
 
-	if predNode != nil {
-		if err := predicate.UnmarshalYAML(predNode); err != nil {
-			return fmt.Errorf("%w: %s: %v", ErrParser, typeName, err)
-		}
+	if predNode == nil {
+		return fmt.Errorf("%w: %s: missing required predicate", ErrParser, typeName)
 	}
 
-	if typeName == "HeaderAssert" && *fieldValue == "" {
-		return fmt.Errorf("%w: %s: missing required '%s' field", ErrParser, typeName, fieldName)
-	}
-
-	if typeName == "CertificateAssert" && *fieldValue == "" {
-		return fmt.Errorf("%w: %s: missing required '%s' field", ErrParser, typeName, fieldName)
+	if err := predicate.UnmarshalYAML(predNode); err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrParser, typeName, err)
 	}
 
 	return nil
@@ -239,7 +213,7 @@ func unmarshalAssertWithField(node ast.Node, fieldName string, fieldValue *strin
 
 // Parse decodes a YAML stream of steps.
 func Parse(r io.Reader) ([]Step, error) {
-	decoder := yaml.NewDecoder(r)
+	decoder := yaml.NewDecoder(r, yaml.Strict(), yaml.DisallowUnknownField())
 	var steps []Step
 
 	if err := decoder.Decode(&steps); err != nil {
