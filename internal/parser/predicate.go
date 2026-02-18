@@ -3,6 +3,7 @@ package parser
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/goccy/go-yaml/ast"
 )
@@ -47,14 +48,18 @@ func nodeToValue(node ast.Node) (any, error) {
 }
 
 // Predicate represents a parsed predicate from YAML.
-// The parser handles YAML parsing only; validation is delegated to the evaluator.
+// The parser handles YAML parsing only; semantic validation is delegated to spec/predicate.
 type Predicate struct {
 	Operation string
 	Value     any
+	HasValue  bool
 }
 
 // UnmarshalYAML decodes a predicate from YAML.
-// It performs basic parsing only; validation should be done by the evaluator.
+// Predicate syntax is strict and only supports:
+//
+//	op: <operator>
+//	value: <any>   # optional only for "exists"
 func (p *Predicate) UnmarshalYAML(node ast.Node) error {
 	mapNode, ok := node.(*ast.MappingNode)
 	if !ok {
@@ -72,31 +77,29 @@ func (p *Predicate) UnmarshalYAML(node ast.Node) error {
 
 		switch key.Value {
 		case "op":
-			// Handle explicit "op" + "value" format
 			opNode, ok := valNode.Value.(*ast.StringNode)
 			if !ok {
 				return errors.New("op value must be a string")
 			}
-			p.Operation = opNode.Value
+			op := strings.TrimSpace(opNode.Value)
+			if op == "" {
+				return errors.New("op value must not be empty")
+			}
+			p.Operation = op
 		case "value":
 			value, err := nodeToValue(valNode.Value)
 			if err != nil {
 				return fmt.Errorf("failed to parse value: %w", err)
 			}
 			p.Value = value
+			p.HasValue = true
 		default:
-			// Handle direct operation format (e.g., "equals": "test")
-			p.Operation = key.Value
-			value, err := nodeToValue(valNode.Value)
-			if err != nil {
-				return fmt.Errorf("failed to parse value for %q: %w", key.Value, err)
-			}
-			p.Value = value
+			return fmt.Errorf("unsupported predicate key %q: use 'op' and optional 'value'", key.Value)
 		}
 	}
 
 	if p.Operation == "" {
-		return errors.New("predicate must specify an operation")
+		return errors.New("predicate must specify an op")
 	}
 
 	return nil

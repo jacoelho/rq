@@ -604,14 +604,16 @@ func TestRunnerSecretRedaction(t *testing.T) {
 		t.Fatalf("Failed to create runner: %s", exitResult.Message)
 	}
 
-	var outputBuf bytes.Buffer
-	runner.SetOutput(&outputBuf)
+	var stdoutBuf bytes.Buffer
+	var stderrBuf bytes.Buffer
+	runner.SetOutput(&stdoutBuf)
+	runner.SetErrorOutput(&stderrBuf)
 
 	ctx := context.Background()
 	result, err := runner.ExecuteFiles(ctx, cfg.TestFiles)
 
 	if result != nil {
-		if formatErr := result.Format(results.FormatText, &outputBuf); formatErr != nil {
+		if formatErr := result.Format(results.FormatText, &stdoutBuf); formatErr != nil {
 			t.Fatalf("Failed to format results: %v", formatErr)
 		}
 	}
@@ -619,7 +621,7 @@ func TestRunnerSecretRedaction(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
-	output := outputBuf.String()
+	output := stderrBuf.String()
 
 	secrets := map[string]string{
 		"api_key":  "api_key_secret",
@@ -634,5 +636,196 @@ func TestRunnerSecretRedaction(t *testing.T) {
 
 	if !strings.Contains(output, "[S256:") {
 		t.Errorf("Debug output should contain redacted secrets in [S256:xxxx] format, but it doesn't")
+	}
+
+	if strings.Contains(stdoutBuf.String(), "REQUEST:") || strings.Contains(stdoutBuf.String(), "RESPONSE:") {
+		t.Errorf("stdout should not contain debug payloads, got:\n%s", stdoutBuf.String())
+	}
+}
+
+func TestRunJSONModeErrorsGoToStderr(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status": "inactive"}`))
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "test.yaml")
+	yamlContent := fmt.Sprintf(`- method: GET
+  url: %s/api/status
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.status
+        op: equals
+        value: "active"`, server.URL)
+	if err := os.WriteFile(testFile, []byte(yamlContent), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	cfg := &config.Config{
+		TestFiles:    []string{testFile},
+		OutputFormat: results.FormatJSON,
+	}
+
+	runner, exitResult := New(cfg)
+	if exitResult != nil {
+		t.Fatalf("Failed to create runner: %s", exitResult.Message)
+	}
+
+	var stdoutBuf bytes.Buffer
+	var stderrBuf bytes.Buffer
+	runner.SetOutput(&stdoutBuf)
+	runner.SetErrorOutput(&stderrBuf)
+
+	exitCode := runner.Run(context.Background())
+	if exitCode != 1 {
+		t.Fatalf("Expected exit code 1, got %d", exitCode)
+	}
+
+	if strings.TrimSpace(stdoutBuf.String()) != "" {
+		t.Fatalf("Expected empty stdout on run error in JSON mode, got:\n%s", stdoutBuf.String())
+	}
+
+	if !strings.Contains(stderrBuf.String(), "Error in iteration 1") {
+		t.Fatalf("Expected stderr to contain iteration error, got:\n%s", stderrBuf.String())
+	}
+}
+
+func TestRunJSONModeDebugOperationalLogsGoToStderr(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if requestCount%2 == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"status":"retry"}`))
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "test.yaml")
+	yamlContent := fmt.Sprintf(`- method: GET
+  url: %s/retry
+  options:
+    retries: 1
+  asserts:
+    status:
+      - op: equals
+        value: 200`, server.URL)
+	if err := os.WriteFile(testFile, []byte(yamlContent), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	cfg := &config.Config{
+		TestFiles:    []string{testFile},
+		Debug:        true,
+		Repeat:       1,
+		OutputFormat: results.FormatJSON,
+		SecretSalt:   "test-salt",
+	}
+
+	runner, exitResult := New(cfg)
+	if exitResult != nil {
+		t.Fatalf("Failed to create runner: %s", exitResult.Message)
+	}
+
+	var stdoutBuf bytes.Buffer
+	var stderrBuf bytes.Buffer
+	runner.SetOutput(&stdoutBuf)
+	runner.SetErrorOutput(&stderrBuf)
+
+	exitCode := runner.Run(context.Background())
+	if exitCode != 0 {
+		t.Fatalf("Expected exit code 0, got %d (stderr: %s)", exitCode, stderrBuf.String())
+	}
+
+	stdout := stdoutBuf.String()
+	if strings.Contains(stdout, "--- Iteration") {
+		t.Fatalf("stdout contains iteration header in JSON mode:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "Retry attempt") {
+		t.Fatalf("stdout contains retry log in JSON mode:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, `"aggregated"`) {
+		t.Fatalf("stdout missing aggregated JSON payload:\n%s", stdout)
+	}
+
+	stderr := stderrBuf.String()
+	if !strings.Contains(stderr, "--- Iteration") {
+		t.Fatalf("stderr missing iteration header:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "Retry attempt") {
+		t.Fatalf("stderr missing retry log:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, `"description":"REQUEST"`) {
+		t.Fatalf("stderr missing debug request payload:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, `"description":"RESPONSE"`) {
+		t.Fatalf("stderr missing debug response payload:\n%s", stderr)
+	}
+	if strings.Contains(stdout, `"description":"REQUEST"`) || strings.Contains(stdout, `"description":"RESPONSE"`) {
+		t.Fatalf("stdout should not contain debug payload objects:\n%s", stdout)
+	}
+}
+
+func TestRunTextModeErrorsGoToStderr(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status": "inactive"}`))
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "test.yaml")
+	yamlContent := fmt.Sprintf(`- method: GET
+  url: %s/api/status
+  asserts:
+    status:
+      - op: equals
+        value: 200
+    jsonpath:
+      - path: $.status
+        op: equals
+        value: "active"`, server.URL)
+	if err := os.WriteFile(testFile, []byte(yamlContent), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	cfg := &config.Config{
+		TestFiles:    []string{testFile},
+		OutputFormat: results.FormatText,
+	}
+
+	runner, exitResult := New(cfg)
+	if exitResult != nil {
+		t.Fatalf("Failed to create runner: %s", exitResult.Message)
+	}
+
+	var stdoutBuf bytes.Buffer
+	var stderrBuf bytes.Buffer
+	runner.SetOutput(&stdoutBuf)
+	runner.SetErrorOutput(&stderrBuf)
+
+	exitCode := runner.Run(context.Background())
+	if exitCode != 1 {
+		t.Fatalf("Expected exit code 1, got %d", exitCode)
+	}
+
+	if strings.TrimSpace(stdoutBuf.String()) != "" {
+		t.Fatalf("Expected empty stdout on run error in text mode, got:\n%s", stdoutBuf.String())
+	}
+	if !strings.Contains(stderrBuf.String(), "Error in iteration 1") {
+		t.Fatalf("Expected stderr to contain iteration error, got:\n%s", stderrBuf.String())
 	}
 }

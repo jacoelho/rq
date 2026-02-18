@@ -605,3 +605,47 @@ func TestIsNotFound(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractCertificateField(t *testing.T) {
+	now := time.Now()
+	cert := &x509.Certificate{
+		SerialNumber: big.NewInt(42),
+		Subject: pkix.Name{
+			Organization: []string{"Test Subject"},
+		},
+		Issuer: pkix.Name{
+			Organization: []string{"Test Issuer"},
+		},
+		NotAfter: now.Add(24 * time.Hour),
+	}
+
+	resp := &http.Response{
+		TLS: &tls.ConnectionState{
+			PeerCertificates: []*x509.Certificate{cert},
+		},
+	}
+
+	tests := []struct {
+		name      string
+		field     string
+		wantError bool
+	}{
+		{name: "subject", field: CertificateFieldSubject},
+		{name: "issuer", field: CertificateFieldIssuer},
+		{name: "expire_date", field: CertificateFieldExpireDate},
+		{name: "serial_number", field: CertificateFieldSerialNumber},
+		{name: "unsupported_field", field: "unsupported", wantError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, err := ExtractCertificateField(resp, tt.field)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("ExtractCertificateField() error = %v, wantError %v", err, tt.wantError)
+			}
+			if err == nil && value == nil {
+				t.Fatal("ExtractCertificateField() returned nil value without error")
+			}
+		})
+	}
+}

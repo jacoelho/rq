@@ -103,31 +103,6 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
-			name: "xpath_equals",
-			yaml: `
-- method: GET
-  url: https://api.example.com/profile
-  asserts:
-    xpath:
-      - path: string(//profile/name)
-        op: equals
-        value: "Alice"
-`,
-			check: func(t *testing.T, steps []Step) {
-				s := steps[0]
-				if len(s.Asserts.XPath) != 1 {
-					t.Fatalf("expected 1 xpath assert, got %d", len(s.Asserts.XPath))
-				}
-				xp := s.Asserts.XPath[0]
-				if xp.Path != "string(//profile/name)" || xp.Predicate.Operation != "equals" {
-					t.Errorf("XPath[0] = %+v, want Path=string(//profile/name), Operation=equals", xp)
-				}
-				if xp.Predicate.Value != "Alice" {
-					t.Errorf("XPath[0] Value = %v, want Alice", xp.Predicate.Value)
-				}
-			},
-		},
-		{
 			name: "structured_captures_status",
 			yaml: `
 - method: GET
@@ -593,8 +568,9 @@ func TestParseErrors(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		yaml string
+		name    string
+		yaml    string
+		wantErr bool
 	}{
 		{
 			name: "invalid_yaml_syntax",
@@ -605,6 +581,7 @@ func TestParseErrors(t *testing.T) {
     Content-Type: application/json
     Authorization: [unclosed bracket
 `,
+			wantErr: true,
 		},
 		{
 			name: "steps_not_list",
@@ -612,6 +589,7 @@ func TestParseErrors(t *testing.T) {
 method: GET
 url: https://api.example.com/health
 `,
+			wantErr: true,
 		},
 		{
 			name: "step_not_mapping",
@@ -620,6 +598,7 @@ url: https://api.example.com/health
 - method: GET
   url: https://api.example.com/health
 `,
+			wantErr: true,
 		},
 		{
 			name: "invalid_url_type",
@@ -627,6 +606,7 @@ url: https://api.example.com/health
 - method: GET
   url: [not a string]
 `,
+			wantErr: true,
 		},
 		{
 			name: "invalid_headers_type",
@@ -635,6 +615,7 @@ url: https://api.example.com/health
   url: https://api.example.com/health
   headers: "not a map"
 `,
+			wantErr: true,
 		},
 		{
 			name: "invalid_asserts_type",
@@ -643,6 +624,7 @@ url: https://api.example.com/health
   url: https://api.example.com/health
   asserts: "not a map"
 `,
+			wantErr: true,
 		},
 		{
 			name: "invalid_captures_type",
@@ -651,6 +633,7 @@ url: https://api.example.com/health
   url: https://api.example.com/health
   captures: [not a map]
 `,
+			wantErr: true,
 		},
 		{
 			name: "empty_predicate_mapping",
@@ -661,6 +644,41 @@ url: https://api.example.com/health
     status:
       - {}
 `,
+			wantErr: true,
+		},
+		{
+			name: "predicate_shorthand_not_allowed",
+			yaml: `
+- method: GET
+  url: https://api.example.com/health
+  asserts:
+    status:
+      - equals: 200
+`,
+			wantErr: true,
+		},
+		{
+			name: "predicate_unknown_key_not_allowed",
+			yaml: `
+- method: GET
+  url: https://api.example.com/health
+  asserts:
+    status:
+      - op: equals
+        expected: 200
+`,
+			wantErr: true,
+		},
+		{
+			name: "predicate_missing_op",
+			yaml: `
+- method: GET
+  url: https://api.example.com/health
+  asserts:
+    status:
+      - value: 200
+`,
+			wantErr: true,
 		},
 		{
 			name: "header_missing_name",
@@ -671,6 +689,7 @@ url: https://api.example.com/health
     headers:
       - op: exists
 `,
+			wantErr: false,
 		},
 		{
 			name: "predicate_key_not_string",
@@ -681,6 +700,7 @@ url: https://api.example.com/health
     status:
       - 123: value
 `,
+			wantErr: true,
 		},
 		{
 			name: "header_key_not_string",
@@ -691,6 +711,7 @@ url: https://api.example.com/health
     headers:
       - 123: value
 `,
+			wantErr: true,
 		},
 		{
 			name: "path_key_not_string",
@@ -701,6 +722,20 @@ url: https://api.example.com/health
     jsonpath:
       - 123: value
 `,
+			wantErr: true,
+		},
+		{
+			name: "xpath_not_supported",
+			yaml: `
+- method: GET
+  url: https://api.example.com/profile
+  asserts:
+    xpath:
+      - path: string(//profile/name)
+        op: equals
+        value: "Alice"
+`,
+			wantErr: true,
 		},
 		{
 			name: "invalid_options_type",
@@ -709,6 +744,7 @@ url: https://api.example.com/health
   url: https://api.example.com/health
   options: "not a map"
 `,
+			wantErr: true,
 		},
 		{
 			name: "invalid_retries_type",
@@ -718,6 +754,7 @@ url: https://api.example.com/health
   options:
     retries: "not a number"
 `,
+			wantErr: true,
 		},
 		{
 			name: "invalid_follow_redirect_type",
@@ -727,6 +764,7 @@ url: https://api.example.com/health
   options:
     follow_redirect: "not a boolean"
 `,
+			wantErr: true,
 		},
 	}
 
@@ -734,8 +772,11 @@ url: https://api.example.com/health
 		t.Run(tt.name, func(t *testing.T) {
 			r := strings.NewReader(tt.yaml)
 			_, err := Parse(r)
-			if err == nil {
+			if tt.wantErr && err == nil {
 				t.Error("expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
 			}
 		})
 	}
@@ -765,13 +806,15 @@ func TestParseCertificateAssertions(t *testing.T) {
   asserts:
     certificate:
       - name: subject
-        equals: "CN=example.com"
+        op: equals
+        value: "CN=example.com"
       - name: issuer
-        contains: "Let's Encrypt"
+        op: contains
+        value: "Let's Encrypt"
       - name: expire_date
-        exists: true
+        op: exists
       - name: serial_number
-        exists: true
+        op: exists
 `
 
 	steps, err := Parse(strings.NewReader(yamlContent))
@@ -904,17 +947,24 @@ func TestCertificateAssertMissingField(t *testing.T) {
   url: https://example.com
   asserts:
     certificate:
-      - equals: "CN=example.com"
+      - op: equals
+        value: "CN=example.com"
 `
 
-	_, err := Parse(strings.NewReader(yamlContent))
-	if err == nil {
-		t.Fatal("Expected error for missing name, got nil")
+	steps, err := Parse(strings.NewReader(yamlContent))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(steps) != 1 {
+		t.Fatalf("Expected 1 step, got %d", len(steps))
 	}
 
-	expectedError := "missing required 'name' field"
-	if !strings.Contains(err.Error(), expectedError) {
-		t.Errorf("Expected error containing %q, got %q", expectedError, err.Error())
+	if len(steps[0].Asserts.Certificate) != 1 {
+		t.Fatalf("Expected one certificate assert, got %d", len(steps[0].Asserts.Certificate))
+	}
+
+	if steps[0].Asserts.Certificate[0].Name != "" {
+		t.Errorf("Expected empty certificate assert name, got %q", steps[0].Asserts.Certificate[0].Name)
 	}
 }
 
