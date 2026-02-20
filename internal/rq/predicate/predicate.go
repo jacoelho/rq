@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
 
@@ -43,22 +42,22 @@ type Expr struct {
 	HasValue bool
 }
 
-var supportedOperators = []Operator{
-	OpEquals,
-	OpNotEquals,
-	OpContains,
-	OpRegex,
-	OpExists,
-	OpLength,
-	OpGreaterThan,
-	OpLessThan,
-	OpGreaterThanOrEqual,
-	OpLessThanOrEqual,
-	OpStartsWith,
-	OpEndsWith,
-	OpNotContains,
-	OpIn,
-	OpTypeIs,
+var supportedOperatorSet = map[Operator]struct{}{
+	OpEquals:             {},
+	OpNotEquals:          {},
+	OpContains:           {},
+	OpRegex:              {},
+	OpExists:             {},
+	OpLength:             {},
+	OpGreaterThan:        {},
+	OpLessThan:           {},
+	OpGreaterThanOrEqual: {},
+	OpLessThanOrEqual:    {},
+	OpStartsWith:         {},
+	OpEndsWith:           {},
+	OpNotContains:        {},
+	OpIn:                 {},
+	OpTypeIs:             {},
 }
 
 var supportedTypeValues = []string{
@@ -70,16 +69,108 @@ var supportedTypeValues = []string{
 	"null",
 }
 
+var supportedTypeValueSet = map[string]struct{}{
+	"array":   {},
+	"object":  {},
+	"string":  {},
+	"number":  {},
+	"boolean": {},
+	"null":    {},
+}
+
+type regexCompiler interface {
+	Compile(pattern string) (*regexp.Regexp, error)
+}
+
+type cachedRegexCompiler struct {
+	mu       sync.RWMutex
+	patterns map[string]*regexp.Regexp
+}
+
+func newCachedRegexCompiler() *cachedRegexCompiler {
+	return &cachedRegexCompiler{
+		patterns: make(map[string]*regexp.Regexp),
+	}
+}
+
+func (c *cachedRegexCompiler) Compile(pattern string) (*regexp.Regexp, error) {
+	c.mu.RLock()
+	if compiled, ok := c.patterns[pattern]; ok {
+		c.mu.RUnlock()
+		return compiled, nil
+	}
+	c.mu.RUnlock()
+
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid regex %q: %v", ErrInvalidInput, pattern, err)
+	}
+
+	c.mu.Lock()
+	c.patterns[pattern] = compiled
+	c.mu.Unlock()
+
+	return compiled, nil
+}
+
+type operationFunc func(actual any, expected any) (bool, error)
+
+type Evaluator struct {
+	regexCompiler regexCompiler
+	operations    map[Operator]operationFunc
+}
+
+func NewEvaluator() *Evaluator {
+	return newEvaluator(newCachedRegexCompiler())
+}
+
+func newEvaluator(compiler regexCompiler) *Evaluator {
+	e := &Evaluator{
+		regexCompiler: compiler,
+	}
+
+	e.operations = map[Operator]operationFunc{
+		OpEquals: func(actual any, expected any) (bool, error) {
+			return equalValues(actual, expected), nil
+		},
+		OpNotEquals: func(actual any, expected any) (bool, error) {
+			return !equalValues(actual, expected), nil
+		},
+		OpContains: evaluateContains,
+		OpRegex:    e.evaluateRegex,
+		OpExists: func(actual any, _ any) (bool, error) {
+			return evaluateExists(actual), nil
+		},
+		OpLength:             evaluateLength,
+		OpGreaterThan:        evaluateGreaterThan,
+		OpLessThan:           evaluateLessThan,
+		OpGreaterThanOrEqual: evaluateGreaterThanOrEqual,
+		OpLessThanOrEqual:    evaluateLessThanOrEqual,
+		OpStartsWith:         evaluateStartsWith,
+		OpEndsWith:           evaluateEndsWith,
+		OpNotContains:        evaluateNotContains,
+		OpIn:                 evaluateIn,
+		OpTypeIs:             evaluateTypeIs,
+	}
+
+	return e
+}
+
+func isSupportedOperator(op Operator) bool {
+	_, ok := supportedOperatorSet[op]
+	return ok
+}
+
 func ParseOperator(input string) (Operator, error) {
 	op := Operator(input)
-	if slices.Contains(supportedOperators, op) {
+	if isSupportedOperator(op) {
 		return op, nil
 	}
 	return "", fmt.Errorf("%w: %q", ErrUnsupported, input)
 }
 
 func ValidateExpr(expr Expr) error {
-	if !slices.Contains(supportedOperators, expr.Op) {
+	if !isSupportedOperator(expr.Op) {
 		return fmt.Errorf("%w: %q", ErrUnsupported, expr.Op)
 	}
 
@@ -103,45 +194,21 @@ func ValidateExpr(expr Expr) error {
 	return nil
 }
 
-func EvaluateExpr(expr Expr, actual any) (bool, error) {
+func (e *Evaluator) Evaluate(expr Expr, actual any) (bool, error) {
 	if err := ValidateExpr(expr); err != nil {
 		return false, err
 	}
 
-	switch expr.Op {
-	case OpEquals:
-		return equalValues(actual, expr.Value), nil
-	case OpNotEquals:
-		return !equalValues(actual, expr.Value), nil
-	case OpContains:
-		return evaluateContains(actual, expr.Value)
-	case OpRegex:
-		return evaluateRegex(actual, expr.Value)
-	case OpExists:
-		return evaluateExists(actual), nil
-	case OpLength:
-		return evaluateLength(actual, expr.Value)
-	case OpGreaterThan:
-		return evaluateGreaterThan(actual, expr.Value)
-	case OpLessThan:
-		return evaluateLessThan(actual, expr.Value)
-	case OpGreaterThanOrEqual:
-		return evaluateGreaterThanOrEqual(actual, expr.Value)
-	case OpLessThanOrEqual:
-		return evaluateLessThanOrEqual(actual, expr.Value)
-	case OpStartsWith:
-		return evaluateStartsWith(actual, expr.Value)
-	case OpEndsWith:
-		return evaluateEndsWith(actual, expr.Value)
-	case OpNotContains:
-		return evaluateNotContains(actual, expr.Value)
-	case OpIn:
-		return evaluateIn(actual, expr.Value)
-	case OpTypeIs:
-		return evaluateTypeIs(actual, expr.Value)
-	default:
+	opFunc, ok := e.operations[expr.Op]
+	if !ok {
 		return false, fmt.Errorf("%w: %q", ErrUnsupported, expr.Op)
 	}
+
+	return opFunc(actual, expr.Value)
+}
+
+func EvaluateExpr(expr Expr, actual any) (bool, error) {
+	return NewEvaluator().Evaluate(expr, actual)
 }
 
 func equalValues(actual, expected any) bool {
@@ -162,34 +229,7 @@ func evaluateContains(actual, expected any) (bool, error) {
 	return evaluateStringComparison(OpContains, actual, expected, strings.Contains)
 }
 
-var regexCache = struct {
-	sync.RWMutex
-	patterns map[string]*regexp.Regexp
-}{
-	patterns: make(map[string]*regexp.Regexp),
-}
-
-func compileRegex(pattern string) (*regexp.Regexp, error) {
-	regexCache.RLock()
-	if compiled, ok := regexCache.patterns[pattern]; ok {
-		regexCache.RUnlock()
-		return compiled, nil
-	}
-	regexCache.RUnlock()
-
-	compiled, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil, fmt.Errorf("%w: invalid regex %q: %v", ErrInvalidInput, pattern, err)
-	}
-
-	regexCache.Lock()
-	regexCache.patterns[pattern] = compiled
-	regexCache.Unlock()
-
-	return compiled, nil
-}
-
-func evaluateRegex(actual, expected any) (bool, error) {
+func (e *Evaluator) evaluateRegex(actual any, expected any) (bool, error) {
 	actualString, err := requireStringActual(OpRegex, actual)
 	if err != nil {
 		return false, err
@@ -199,7 +239,7 @@ func evaluateRegex(actual, expected any) (bool, error) {
 		return false, err
 	}
 
-	regex, err := compileRegex(pattern)
+	regex, err := e.regexCompiler.Compile(pattern)
 	if err != nil {
 		return false, err
 	}
@@ -316,7 +356,7 @@ func parseTypeValue(value any) (string, error) {
 	}
 
 	normalized := strings.ToLower(strings.TrimSpace(typeValue))
-	if slices.Contains(supportedTypeValues, normalized) {
+	if _, ok := supportedTypeValueSet[normalized]; ok {
 		return normalized, nil
 	}
 

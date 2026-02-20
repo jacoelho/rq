@@ -178,16 +178,16 @@ func Translate(events []ast.Event) Result {
 				continue
 			}
 
-			mappedCapture, needsJSON, reason := mapEnvironmentCapture(&captured, line)
-			if mappedCapture {
-				if needsJSON {
+			captureResult := mapEnvironmentCapture(&captured, line)
+			if captureResult.mapped {
+				if captureResult.requiresJSON {
 					jsonSemanticsEnforced = true
 				}
 				result.MappedLines++
 				continue
 			}
-			if reason != "" {
-				recordUnmapped(report.CodeScriptJSONPathTranslationFailed, statement.Line)
+			if captureResult.issueCode != "" {
+				recordUnmapped(captureResult.issueCode, statement.Line)
 				continue
 			}
 

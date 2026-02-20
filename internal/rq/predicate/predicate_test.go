@@ -269,3 +269,27 @@ func TestEvaluateExpr(t *testing.T) {
 		})
 	}
 }
+
+func TestCachedRegexCompilerCachesByPattern(t *testing.T) {
+	t.Parallel()
+
+	compiler := newCachedRegexCompiler()
+
+	first, err := compiler.Compile("^a+$")
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	second, err := compiler.Compile("^a+$")
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	if first != second {
+		t.Fatalf("Compile() returned different compiled regex pointers for same pattern")
+	}
+
+	if _, err := compiler.Compile("[invalid"); err == nil {
+		t.Fatal("Compile() expected invalid regex error")
+	}
+}
