@@ -1035,6 +1035,90 @@ func TestExecuteFiles_ValidatesBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestExecuteCompiledFilesContinuesAfterFailureAndReturnsFirstError(t *testing.T) {
+	t.Parallel()
+
+	runner := newDefault()
+	files := []CompiledFile{
+		{
+			Filename: "first.yaml",
+			Steps:    nil,
+		},
+		{
+			Filename: "broken.yaml",
+			Steps: []model.Step{
+				{
+					Method: "GET",
+					URL:    "{{.invalid_template",
+				},
+			},
+		},
+		{
+			Filename: "third.yaml",
+			Steps:    nil,
+		},
+	}
+
+	summary, err := runner.executeCompiledFiles(context.Background(), files)
+	if err == nil {
+		t.Fatal("expected first error, got nil")
+	}
+
+	if summary == nil {
+		t.Fatal("expected non-nil summary")
+	}
+	if summary.ExecutedFiles != 3 {
+		t.Fatalf("summary.ExecutedFiles = %d, want 3", summary.ExecutedFiles)
+	}
+	if summary.FailedFiles != 1 {
+		t.Fatalf("summary.FailedFiles = %d, want 1", summary.FailedFiles)
+	}
+	if summary.SucceededFiles != 2 {
+		t.Fatalf("summary.SucceededFiles = %d, want 2", summary.SucceededFiles)
+	}
+	if len(summary.FileResults) != 3 {
+		t.Fatalf("len(summary.FileResults) = %d, want 3", len(summary.FileResults))
+	}
+	if summary.FileResults[1].Error == nil {
+		t.Fatalf("summary.FileResults[1].Error = nil, want non-nil")
+	}
+	if summary.FileResults[2].Error != nil {
+		t.Fatalf("summary.FileResults[2].Error = %v, want nil", summary.FileResults[2].Error)
+	}
+}
+
+func TestExecuteFileExecutorsReturnCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	runner := newDefault()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	fileSummary, fileErr := runner.ExecuteFiles(ctx, []string{"ignored.yaml"})
+	if fileErr != context.Canceled {
+		t.Fatalf("ExecuteFiles() error = %v, want %v", fileErr, context.Canceled)
+	}
+	if fileSummary == nil {
+		t.Fatal("expected non-nil summary from ExecuteFiles")
+	}
+	if fileSummary.ExecutedFiles != 0 {
+		t.Fatalf("ExecuteFiles summary.ExecutedFiles = %d, want 0", fileSummary.ExecutedFiles)
+	}
+
+	compiledSummary, compiledErr := runner.executeCompiledFiles(ctx, []CompiledFile{
+		{Filename: "ignored.yaml"},
+	})
+	if compiledErr != context.Canceled {
+		t.Fatalf("executeCompiledFiles() error = %v, want %v", compiledErr, context.Canceled)
+	}
+	if compiledSummary == nil {
+		t.Fatal("expected non-nil summary from executeCompiledFiles")
+	}
+	if compiledSummary.ExecutedFiles != 0 {
+		t.Fatalf("executeCompiledFiles summary.ExecutedFiles = %d, want 0", compiledSummary.ExecutedFiles)
+	}
+}
+
 func TestRunOnceCompilesConfiguredFilesOnce(t *testing.T) {
 	t.Parallel()
 

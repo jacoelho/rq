@@ -130,6 +130,28 @@ func TestPrepareRequestResolvesTemplatedAbsoluteBodyFile(t *testing.T) {
 	}
 }
 
+func TestResolveRequestBodyWithBaseDirKeepsAbsoluteLikePath(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	step := model.Step{
+		BodyFile: `C:/tmp/payload.bin`,
+	}
+
+	_, err := resolveRequestBodyWithBaseDir(step, nil, baseDir)
+	if err == nil {
+		t.Fatal("expected read error for missing body_file")
+	}
+
+	joined := filepath.Join(baseDir, `C:/tmp/payload.bin`)
+	if strings.Contains(err.Error(), joined) {
+		t.Fatalf("error path should not use baseDir join, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), `C:/tmp/payload.bin`) {
+		t.Fatalf("error should include absolute-like path, got: %v", err)
+	}
+}
+
 func TestExecuteStepWhenCondition(t *testing.T) {
 	t.Parallel()
 

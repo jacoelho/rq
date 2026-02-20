@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jacoelho/rq/internal/pathing"
 	"github.com/jacoelho/rq/internal/pm/config"
 	"github.com/jacoelho/rq/internal/pm/report"
 	"github.com/jacoelho/rq/internal/rq/model"
@@ -362,9 +363,9 @@ func TestRebaseBodyFilePathPreservesAbsoluteLikePaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := rebaseBodyFilePath(tt.bodyFile, "/input/collection.json", "/out/request.yaml")
+			got := pathing.RebaseBodyFilePath(tt.bodyFile, "/input/collection.json", "/out/request.yaml")
 			if got != tt.bodyFile {
-				t.Fatalf("rebaseBodyFilePath(%q) = %q, want unchanged", tt.bodyFile, got)
+				t.Fatalf("RebaseBodyFilePath(%q) = %q, want unchanged", tt.bodyFile, got)
 			}
 		})
 	}
@@ -378,7 +379,7 @@ func TestRebaseBodyFilePathRebasesTemplatedRelativePath(t *testing.T) {
 	outputFile := filepath.Join(tempDir, "out", "request.yaml")
 	bodyFile := "payloads/{{.name}}.bin"
 
-	got := rebaseBodyFilePath(bodyFile, inputFile, outputFile)
+	got := pathing.RebaseBodyFilePath(bodyFile, inputFile, outputFile)
 
 	sourceAbsolute := filepath.Clean(filepath.Join(filepath.Dir(inputFile), bodyFile))
 	expectedRelative, err := filepath.Rel(filepath.Dir(outputFile), sourceAbsolute)
@@ -386,7 +387,7 @@ func TestRebaseBodyFilePathRebasesTemplatedRelativePath(t *testing.T) {
 		t.Fatalf("filepath.Rel failed: %v", err)
 	}
 	if got != filepath.ToSlash(expectedRelative) {
-		t.Fatalf("rebaseBodyFilePath(%q) = %q, want %q", bodyFile, got, filepath.ToSlash(expectedRelative))
+		t.Fatalf("RebaseBodyFilePath(%q) = %q, want %q", bodyFile, got, filepath.ToSlash(expectedRelative))
 	}
 }
 
@@ -399,9 +400,9 @@ func TestRebaseBodyFilePathPreservesTemplatedPrefixPath(t *testing.T) {
 	}
 
 	for _, bodyFile := range tests {
-		got := rebaseBodyFilePath(bodyFile, "/input/collection.json", "/out/request.yaml")
+		got := pathing.RebaseBodyFilePath(bodyFile, "/input/collection.json", "/out/request.yaml")
 		if got != bodyFile {
-			t.Fatalf("rebaseBodyFilePath(%q) = %q, want unchanged", bodyFile, got)
+			t.Fatalf("RebaseBodyFilePath(%q) = %q, want unchanged", bodyFile, got)
 		}
 	}
 }

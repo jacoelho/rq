@@ -538,6 +538,95 @@ func TestRequestFormBodyPreservesTemplates(t *testing.T) {
 	}
 }
 
+func TestRequestFormLikeBodiesShareEncodingAndContentType(t *testing.T) {
+	t.Parallel()
+
+	newNode := func(mode string, values []ast.BodyKV) normalize.RequestNode {
+		body := &ast.Body{Mode: mode}
+		if mode == "urlencoded" {
+			body.URLEncoded = values
+		} else {
+			body.FormData = values
+		}
+
+		return normalize.RequestNode{
+			Name: "Submit",
+			Request: ast.Request{
+				Method: "POST",
+				URL:    ast.URLValue{Raw: "https://api.example.com/submit"},
+				Body:   body,
+			},
+		}
+	}
+
+	values := []ast.BodyKV{
+		{Key: "name", Value: "John Doe"},
+		{Key: "user_id", Value: "{{user_id}}"},
+	}
+
+	urlEncoded := Request(newNode("urlencoded", values))
+	formData := Request(newNode("formdata", values))
+	if !urlEncoded.Converted || !formData.Converted {
+		t.Fatalf("expected both request bodies to convert, got urlencoded=%v formdata=%v", urlEncoded.Converted, formData.Converted)
+	}
+	if urlEncoded.Step.Body != formData.Step.Body {
+		t.Fatalf("body mismatch: urlencoded=%q formdata=%q", urlEncoded.Step.Body, formData.Step.Body)
+	}
+
+	urlContentType, ok := urlEncoded.Step.Headers.Get("Content-Type")
+	if !ok {
+		t.Fatalf("urlencoded request missing Content-Type header: %+v", urlEncoded.Step.Headers)
+	}
+	formContentType, ok := formData.Step.Headers.Get("Content-Type")
+	if !ok {
+		t.Fatalf("formdata request missing Content-Type header: %+v", formData.Step.Headers)
+	}
+	if urlContentType != "application/x-www-form-urlencoded" || formContentType != "application/x-www-form-urlencoded" {
+		t.Fatalf("unexpected content-types: urlencoded=%q formdata=%q", urlContentType, formContentType)
+	}
+}
+
+func TestRequestFormLikeBodiesSkipContentTypeWhenBodyEmpty(t *testing.T) {
+	t.Parallel()
+
+	newNode := func(mode string) normalize.RequestNode {
+		body := &ast.Body{
+			Mode: mode,
+		}
+
+		values := []ast.BodyKV{
+			{Key: "", Value: "ignored"},
+			{Key: "disabled", Value: "ignored", Disabled: true},
+		}
+		if mode == "urlencoded" {
+			body.URLEncoded = values
+		} else {
+			body.FormData = values
+		}
+
+		return normalize.RequestNode{
+			Name: "Submit",
+			Request: ast.Request{
+				Method: "POST",
+				URL:    ast.URLValue{Raw: "https://api.example.com/submit"},
+				Body:   body,
+			},
+		}
+	}
+
+	urlEncoded := Request(newNode("urlencoded"))
+	formData := Request(newNode("formdata"))
+	if urlEncoded.Step.Body != "" || formData.Step.Body != "" {
+		t.Fatalf("expected empty bodies, got urlencoded=%q formdata=%q", urlEncoded.Step.Body, formData.Step.Body)
+	}
+	if _, ok := urlEncoded.Step.Headers.Get("Content-Type"); ok {
+		t.Fatalf("did not expect Content-Type for empty urlencoded body, got %+v", urlEncoded.Step.Headers)
+	}
+	if _, ok := formData.Step.Headers.Get("Content-Type"); ok {
+		t.Fatalf("did not expect Content-Type for empty formdata body, got %+v", formData.Step.Headers)
+	}
+}
+
 func TestRequestReportsUnsupportedTemplatePlaceholder(t *testing.T) {
 	t.Parallel()
 
@@ -561,6 +650,46 @@ func TestRequestReportsUnsupportedTemplatePlaceholder(t *testing.T) {
 	}
 	if got, _ := result.Step.Headers.Get("Authorization"); got != "Bearer {{base-url}}" {
 		t.Fatalf("authorization header = %q", got)
+	}
+}
+
+func TestRequestURLencodedBodyReportsUnsupportedTemplateInKeyAndValue(t *testing.T) {
+	t.Parallel()
+
+	node := normalize.RequestNode{
+		Name: "Submit",
+		Request: ast.Request{
+			Method: "POST",
+			URL:    ast.URLValue{Raw: "https://api.example.com/submit"},
+			Body: &ast.Body{
+				Mode: "urlencoded",
+				URLEncoded: []ast.BodyKV{
+					{Key: "{{base-url}}", Value: "{{base-url}}"},
+				},
+			},
+		},
+	}
+
+	result := Request(node)
+	if !result.Converted {
+		t.Fatal("expected request to be converted")
+	}
+
+	hasBodyKeyIssue := false
+	hasBodyValueIssue := false
+	for _, issue := range result.Issues {
+		if strings.Contains(issue.Message, "unsupported template placeholder in body key[{{base-url}}]") {
+			hasBodyKeyIssue = true
+		}
+		if strings.Contains(issue.Message, "unsupported template placeholder in body value[{{base-url}}]") {
+			hasBodyValueIssue = true
+		}
+	}
+	if !hasBodyKeyIssue {
+		t.Fatalf("expected unsupported template placeholder issue for body key, got %+v", result.Issues)
+	}
+	if !hasBodyValueIssue {
+		t.Fatalf("expected unsupported template placeholder issue for body value, got %+v", result.Issues)
 	}
 }
 

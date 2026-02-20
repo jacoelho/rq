@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/jacoelho/rq/internal/pathing"
 	"github.com/jacoelho/rq/internal/rq/capture"
 	"github.com/jacoelho/rq/internal/rq/expr"
 	"github.com/jacoelho/rq/internal/rq/model"
@@ -199,9 +199,7 @@ func resolveRequestBodyWithBaseDir(step model.Step, templateVars map[string]any,
 	if filePath == "" {
 		return body, nil
 	}
-	if !filepath.IsAbs(filePath) && strings.TrimSpace(baseDir) != "" {
-		filePath = filepath.Join(baseDir, filePath)
-	}
+	filePath = pathing.ResolveBodyFilePath(filePath, baseDir)
 
 	content, err := os.ReadFile(filePath)
 	if err != nil {

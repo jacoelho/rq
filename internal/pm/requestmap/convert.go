@@ -224,32 +224,17 @@ func convertNormalizedKeyValues[T any](
 	getValue func(T) string,
 	fieldName string,
 ) (model.KeyValues, []report.Issue) {
-	var values model.KeyValues
-	var issues []report.Issue
-
-	for _, entry := range entries {
-		if isDisabled(entry) {
-			continue
-		}
-
-		key := strings.TrimSpace(getKey(entry))
-		if key == "" {
-			continue
-		}
-
-		normalized, normalizedIssues := normalizeWithIssues(getValue(entry), fmt.Sprintf("%s[%s]", fieldName, key))
-		issues = append(issues, normalizedIssues...)
-		values = append(values, model.KeyValue{
-			Key:   key,
-			Value: normalized,
-		})
-	}
-
-	if len(values) == 0 {
-		return nil, issues
-	}
-
-	return values, issues
+	return normalizeKeyValueEntries(
+		entries,
+		isDisabled,
+		getKey,
+		getValue,
+		false,
+		nil,
+		func(key string) string {
+			return fmt.Sprintf("%s[%s]", fieldName, key)
+		},
+	)
 }
 
 func convertBody(node normalize.RequestNode) (string, string, model.KeyValues, []report.Issue) {
@@ -271,32 +256,15 @@ func convertBody(node normalize.RequestNode) (string, string, model.KeyValues, [
 		sourcePath, issues := normalizeWithIssues(strings.TrimSpace(node.Request.Body.File.Src), "body_file")
 		return "", sourcePath, nil, issues
 	case "urlencoded":
-		encoded, issues := encodeKeyValues(node.Request.Body.URLEncoded)
-		if encoded == "" {
-			return "", "", nil, issues
-		}
-		return encoded, "", model.KeyValues{
-			{Key: "Content-Type", Value: "application/x-www-form-urlencoded"},
-		}, issues
+		body, headers, issues := convertFormLikeBody(node.Request.Body.URLEncoded)
+		return body, "", headers, issues
 	case "formdata":
-		for _, entry := range node.Request.Body.FormData {
-			if entry.Disabled {
-				continue
-			}
-			if strings.EqualFold(strings.TrimSpace(entry.Type), "file") {
-				return "", "", nil, []report.Issue{
-					requestIssue(report.CodeBodyNotSupported, "form-data file entries are not supported"),
-				}
-			}
+		if issues := validateFormDataEntries(node.Request.Body.FormData); len(issues) > 0 {
+			return "", "", nil, issues
 		}
 
-		encoded, issues := encodeKeyValues(node.Request.Body.FormData)
-		if encoded == "" {
-			return "", "", nil, issues
-		}
-		return encoded, "", model.KeyValues{
-			{Key: "Content-Type", Value: "application/x-www-form-urlencoded"},
-		}, issues
+		body, headers, issues := convertFormLikeBody(node.Request.Body.FormData)
+		return body, "", headers, issues
 	default:
 		return "", "", nil, []report.Issue{
 			requestIssue(report.CodeBodyNotSupported, fmt.Sprintf("body mode is not supported: %s", mode)),
@@ -304,35 +272,102 @@ func convertBody(node normalize.RequestNode) (string, string, model.KeyValues, [
 	}
 }
 
-func encodeKeyValues(values []ast.BodyKV) (string, []report.Issue) {
-	parts := make([]string, 0, len(values))
-	var issues []report.Issue
+func convertFormLikeBody(values []ast.BodyKV) (string, model.KeyValues, []report.Issue) {
+	encoded, issues := encodeKeyValues(values)
+	if encoded == "" {
+		return "", nil, issues
+	}
 
+	return encoded, model.KeyValues{
+		{Key: "Content-Type", Value: "application/x-www-form-urlencoded"},
+	}, issues
+}
+
+func validateFormDataEntries(values []ast.BodyKV) []report.Issue {
 	for _, entry := range values {
 		if entry.Disabled {
 			continue
 		}
-		key := strings.TrimSpace(entry.Key)
+		if strings.EqualFold(strings.TrimSpace(entry.Type), "file") {
+			return []report.Issue{
+				requestIssue(report.CodeBodyNotSupported, "form-data file entries are not supported"),
+			}
+		}
+	}
+
+	return nil
+}
+
+func encodeKeyValues(values []ast.BodyKV) (string, []report.Issue) {
+	normalizedValues, issues := normalizeKeyValueEntries(
+		values,
+		func(entry ast.BodyKV) bool { return entry.Disabled },
+		func(entry ast.BodyKV) string { return entry.Key },
+		func(entry ast.BodyKV) string { return entry.Value },
+		true,
+		func(key string) string {
+			return fmt.Sprintf("body key[%s]", key)
+		},
+		func(key string) string {
+			return fmt.Sprintf("body value[%s]", key)
+		},
+	)
+	if len(normalizedValues) == 0 {
+		return "", issues
+	}
+
+	parts := make([]string, 0, len(normalizedValues))
+	for _, entry := range normalizedValues {
+		encodedKey := encodeFormComponentPreserveTemplates(entry.Key)
+		encodedValue := encodeFormComponentPreserveTemplates(entry.Value)
+		parts = append(parts, encodedKey+"="+encodedValue)
+	}
+
+	return strings.Join(parts, "&"), issues
+}
+
+func normalizeKeyValueEntries[T any](
+	entries []T,
+	isDisabled func(T) bool,
+	getKey func(T) string,
+	getValue func(T) string,
+	normalizeKey bool,
+	keyField func(string) string,
+	valueField func(string) string,
+) (model.KeyValues, []report.Issue) {
+	values := make(model.KeyValues, 0, len(entries))
+	var issues []report.Issue
+
+	for _, entry := range entries {
+		if isDisabled(entry) {
+			continue
+		}
+
+		key := strings.TrimSpace(getKey(entry))
 		if key == "" {
 			continue
 		}
 
-		normalizedKey, keyIssues := normalizeWithIssues(key, fmt.Sprintf("body key[%s]", key))
-		issues = append(issues, keyIssues...)
+		normalizedKey := key
+		if normalizeKey {
+			normalized, normalizedIssues := normalizeWithIssues(key, keyField(key))
+			issues = append(issues, normalizedIssues...)
+			normalizedKey = normalized
+		}
 
-		normalizedValue, valueIssues := normalizeWithIssues(entry.Value, fmt.Sprintf("body value[%s]", key))
-		issues = append(issues, valueIssues...)
-
-		encodedKey := encodeFormComponentPreserveTemplates(normalizedKey)
-		encodedValue := encodeFormComponentPreserveTemplates(normalizedValue)
-		parts = append(parts, encodedKey+"="+encodedValue)
+		normalizedValue, normalizedIssues := normalizeWithIssues(getValue(entry), valueField(key))
+		issues = append(issues, normalizedIssues...)
+		values = append(values, model.KeyValue{
+			Key:   normalizedKey,
+			Value: normalizedValue,
+		})
 	}
 
-	if len(parts) == 0 {
-		return "", issues
+	if len(values) == 0 {
+		return nil, issues
 	}
 
-	return strings.Join(parts, "&"), issues
+	return values, issues
 }
 
 func encodeFormComponentPreserveTemplates(input string) string {

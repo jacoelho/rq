@@ -192,36 +192,16 @@ func (r *Runner) runOnce(ctx context.Context) (*output.Summary, error) {
 }
 
 func (r *Runner) ExecuteFiles(ctx context.Context, files []string) (*output.Summary, error) {
-	s := output.NewSummary(len(files))
-
-	overallStart := time.Now()
-	var firstError error
-
-	for _, filename := range files {
-		select {
-		case <-ctx.Done():
-			return s, ctx.Err()
-		default:
-		}
-
-		start := time.Now()
-		requestCount, err := r.executeFile(ctx, filename)
-		duration := time.Since(start)
-
-		s.Add(output.FileResult{
-			Filename:     filename,
-			RequestCount: requestCount,
-			Duration:     duration,
-			Error:        err,
-		})
-
-		if err != nil && firstError == nil {
-			firstError = err
-		}
-	}
-
-	s.SetTotalDuration(time.Since(overallStart))
-	return s, firstError
+	return executeFilesWithSummary(
+		ctx,
+		files,
+		func(filename string) string {
+			return filename
+		},
+		func(ctx context.Context, filename string) (int, error) {
+			return r.executeFile(ctx, filename)
+		},
+	)
 }
 
 func (r *Runner) executeFile(ctx context.Context, filename string) (int, error) {
@@ -234,6 +214,24 @@ func (r *Runner) executeFile(ctx context.Context, filename string) (int, error) 
 }
 
 func (r *Runner) executeCompiledFiles(ctx context.Context, files []CompiledFile) (*output.Summary, error) {
+	return executeFilesWithSummary(
+		ctx,
+		files,
+		func(file CompiledFile) string {
+			return file.Filename
+		},
+		func(ctx context.Context, file CompiledFile) (int, error) {
+			return r.executeCompiledFile(ctx, file)
+		},
+	)
+}
+
+func executeFilesWithSummary[T any](
+	ctx context.Context,
+	files []T,
+	filename func(T) string,
+	execute func(context.Context, T) (int, error),
+) (*output.Summary, error) {
 	s := output.NewSummary(len(files))
 
 	overallStart := time.Now()
@@ -247,11 +245,11 @@ func (r *Runner) executeCompiledFiles(ctx context.Context, files []CompiledFile)
 		}
 
 		start := time.Now()
-		requestCount, err := r.executeCompiledFile(ctx, file)
+		requestCount, err := execute(ctx, file)
 		duration := time.Since(start)
 
 		s.Add(output.FileResult{
-			Filename:     file.Filename,
+			Filename:     filename(file),
 			RequestCount: requestCount,
 			Duration:     duration,
 			Error:        err,
