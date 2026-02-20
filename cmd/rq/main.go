@@ -6,8 +6,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/jacoelho/rq/internal/config"
-	"github.com/jacoelho/rq/internal/runner"
+	"github.com/jacoelho/rq/internal/rq/config"
+	"github.com/jacoelho/rq/internal/rq/execute"
 )
 
 func main() {
@@ -22,7 +22,7 @@ func run() int {
 		return exitResult.ExitCode
 	}
 
-	r, exitResult := runner.New(cfg)
+	r, exitResult := execute.New(cfg)
 	if exitResult != nil {
 		exitResult.Print()
 		return exitResult.ExitCode
