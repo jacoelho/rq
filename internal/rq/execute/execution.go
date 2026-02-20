@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/jacoelho/rq/internal/pathing"
-	"github.com/jacoelho/rq/internal/rq/capture"
 	"github.com/jacoelho/rq/internal/rq/expr"
 	"github.com/jacoelho/rq/internal/rq/model"
 	"github.com/jacoelho/rq/internal/rq/templating"
@@ -252,19 +251,13 @@ func (r *Runner) processStepResponse(step model.Step, resp *http.Response, respB
 		hasJSONPathSelectors = true
 	}
 
-	var (
-		jsonPathData any
-		jsonPathErr  error
-	)
-	if hasJSONPathSelectors {
-		jsonPathData, jsonPathErr = capture.ParseJSONBody(respBody)
-	}
+	selectors := selectorContextFromBody(respBody, hasJSONPathSelectors)
 
-	if err := r.executeAssertionsWithJSONPathData(step.Asserts, resp, jsonPathData, jsonPathErr); err != nil {
+	if err := r.executeAssertions(step.Asserts, resp, selectors); err != nil {
 		return fmt.Errorf("assertion failed: %w", err)
 	}
 
-	if err := r.executeCapturesWithJSONPathData(step.Captures, resp, respBody, jsonPathData, jsonPathErr, captures); err != nil {
+	if err := r.executeCapturesWithSelectors(step.Captures, resp, respBody, selectors, captures); err != nil {
 		return fmt.Errorf("capture failed: %w", err)
 	}
 

@@ -10,162 +10,27 @@ import (
 	"github.com/jacoelho/rq/internal/rq/predicate"
 )
 
-func (r *Runner) executeAssertionsWithJSONPathData(asserts model.Asserts, resp *http.Response, jsonPathData any, jsonPathErr error) error {
-	if err := r.executeStatusAssertions(asserts.Status, resp); err != nil {
-		return err
+func (r *Runner) executeAssertions(asserts model.Asserts, resp *http.Response, selectors selectorContext) error {
+	runner := assertionRunner{
+		resp:      resp,
+		selectors: selectors,
+		evaluator: r.assertionEvaluator(),
 	}
 
-	if err := r.executeHeaderAssertions(asserts.Headers, resp); err != nil {
+	if err := runner.runStatus(asserts.Status); err != nil {
 		return err
 	}
-
-	if err := r.executeCertificateAssertions(asserts.Certificate, resp); err != nil {
+	if err := runner.runHeaders(asserts.Headers); err != nil {
 		return err
 	}
-
-	if err := r.executeJSONPathAssertions(asserts.JSONPath, jsonPathData, jsonPathErr); err != nil {
+	if err := runner.runCertificates(asserts.Certificate); err != nil {
+		return err
+	}
+	if err := runner.runJSONPath(asserts.JSONPath); err != nil {
 		return err
 	}
 
 	return nil
-}
-
-// executeStatusAssertions validates status code assertions.
-func (r *Runner) executeStatusAssertions(asserts []model.StatusAssert, resp *http.Response) error {
-	return runAssertions(
-		asserts,
-		func(_ model.StatusAssert) (any, error) {
-			return capture.ExtractStatusCode(resp)
-		},
-		func(_ model.StatusAssert, err error) (any, error) {
-			return nil, fmt.Errorf("status extraction failed: %w", err)
-		},
-		func(current model.StatusAssert) model.Predicate {
-			return current.Predicate
-		},
-		func(_ model.StatusAssert, err error) error {
-			return fmt.Errorf("status assertion error: %w", err)
-		},
-		func(current model.StatusAssert, actual any) error {
-			return fmt.Errorf("status assertion failed: expected %s %v, got %v", current.Predicate.Operation, current.Predicate.Value, actual)
-		},
-	)
-}
-
-// executeHeaderAssertions validates header assertions.
-func (r *Runner) executeHeaderAssertions(asserts []model.HeaderAssert, resp *http.Response) error {
-	return runAssertions(
-		asserts,
-		func(current model.HeaderAssert) (any, error) {
-			return capture.ExtractHeader(resp, current.Name)
-		},
-		func(current model.HeaderAssert, err error) (any, error) {
-			if capture.IsNotFound(err) {
-				return "", nil
-			}
-			return nil, fmt.Errorf("header extraction failed for %s: %w", current.Name, err)
-		},
-		func(current model.HeaderAssert) model.Predicate {
-			return current.Predicate
-		},
-		func(_ model.HeaderAssert, err error) error {
-			return fmt.Errorf("header assertion error: %w", err)
-		},
-		func(current model.HeaderAssert, actual any) error {
-			return fmt.Errorf("header %s assertion failed: expected %s %v, got %v", current.Name, current.Predicate.Operation, current.Predicate.Value, actual)
-		},
-	)
-}
-
-// executeCertificateAssertions validates certificate assertions.
-func (r *Runner) executeCertificateAssertions(asserts []model.CertificateAssert, resp *http.Response) error {
-	return runAssertions(
-		asserts,
-		func(current model.CertificateAssert) (any, error) {
-			return capture.ExtractCertificateField(resp, current.Name)
-		},
-		func(current model.CertificateAssert, err error) (any, error) {
-			return nil, fmt.Errorf("certificate assertion failed for field %s: %w", current.Name, err)
-		},
-		func(current model.CertificateAssert) model.Predicate {
-			return current.Predicate
-		},
-		func(_ model.CertificateAssert, err error) error {
-			return fmt.Errorf("certificate assertion error: %w", err)
-		},
-		func(current model.CertificateAssert, actual any) error {
-			return fmt.Errorf("certificate %s assertion failed: expected %s %v, got %v", current.Name, current.Predicate.Operation, current.Predicate.Value, actual)
-		},
-	)
-}
-
-// executeJSONPathAssertions validates JSONPath assertions.
-func (r *Runner) executeJSONPathAssertions(asserts []model.JSONPathAssert, jsonPathData any, jsonPathErr error) error {
-	if len(asserts) == 0 {
-		return nil
-	}
-	if jsonPathErr != nil {
-		return fmt.Errorf("JSONPath assertion failed for %s: %w", asserts[0].Path, jsonPathErr)
-	}
-
-	return runAssertions(
-		asserts,
-		func(current model.JSONPathAssert) (any, error) {
-			return capture.ExtractJSONPathFromData(jsonPathData, current.Path)
-		},
-		func(current model.JSONPathAssert, err error) (any, error) {
-			return resolveJSONPathAssertionValue(current, err)
-		},
-		func(current model.JSONPathAssert) model.Predicate {
-			return current.Predicate
-		},
-		func(current model.JSONPathAssert, err error) error {
-			return fmt.Errorf("JSONPath assertion failed for %s: %w", current.Path, err)
-		},
-		func(current model.JSONPathAssert, _ any) error {
-			return fmt.Errorf("JSONPath assertion failed for %s: expected %s %v, but condition was not met", current.Path, current.Predicate.Operation, current.Predicate.Value)
-		},
-	)
-}
-
-func runAssertions[T any](
-	asserts []T,
-	extractValue func(T) (any, error),
-	handleExtractionError func(T, error) (any, error),
-	assertionPredicate func(T) model.Predicate,
-	handleEvaluationError func(T, error) error,
-	handleAssertionFailure func(T, any) error,
-) error {
-	for _, current := range asserts {
-		actual, err := extractValue(current)
-		if err != nil {
-			actual, err = handleExtractionError(current, err)
-			if err != nil {
-				return err
-			}
-		}
-
-		ok, err := evaluateAssertion(actual, assertionPredicate(current))
-		if err != nil {
-			return handleEvaluationError(current, err)
-		}
-		if !ok {
-			return handleAssertionFailure(current, actual)
-		}
-	}
-
-	return nil
-}
-
-func parseJSONPathData(body []byte, hasSelectors bool) (any, error) {
-	if !hasSelectors {
-		return nil, nil
-	}
-	return capture.ParseJSONBody(body)
-}
-
-func evaluateAssertion(actual any, predicateInput model.Predicate) (bool, error) {
-	return assert.Evaluate(actual, predicateInput)
 }
 
 func resolveJSONPathAssertionValue(assert model.JSONPathAssert, err error) (any, error) {
@@ -182,4 +47,108 @@ func resolveJSONPathAssertionValue(assert model.JSONPathAssert, err error) (any,
 	}
 
 	return nil, nil
+}
+
+type assertionRunner struct {
+	resp      *http.Response
+	selectors selectorContext
+	evaluator *assert.Evaluator
+}
+
+func (r assertionRunner) evaluate(actual any, predicateInput model.Predicate) (bool, error) {
+	if r.evaluator == nil {
+		return assert.Evaluate(actual, predicateInput)
+	}
+
+	return r.evaluator.Evaluate(actual, predicateInput)
+}
+
+func (r assertionRunner) runStatus(asserts []model.StatusAssert) error {
+	for _, current := range asserts {
+		actual, err := capture.ExtractStatusCode(r.resp)
+		if err != nil {
+			return fmt.Errorf("status extraction failed: %w", err)
+		}
+
+		ok, err := r.evaluate(actual, current.Predicate)
+		if err != nil {
+			return fmt.Errorf("status assertion error: %w", err)
+		}
+		if !ok {
+			return fmt.Errorf("status assertion failed: expected %s %v, got %v", current.Predicate.Operation, current.Predicate.Value, actual)
+		}
+	}
+
+	return nil
+}
+
+func (r assertionRunner) runHeaders(asserts []model.HeaderAssert) error {
+	for _, current := range asserts {
+		actual, err := capture.ExtractHeader(r.resp, current.Name)
+		if err != nil {
+			if capture.IsNotFound(err) {
+				actual = ""
+			} else {
+				return fmt.Errorf("header extraction failed for %s: %w", current.Name, err)
+			}
+		}
+
+		ok, err := r.evaluate(actual, current.Predicate)
+		if err != nil {
+			return fmt.Errorf("header assertion error: %w", err)
+		}
+		if !ok {
+			return fmt.Errorf("header %s assertion failed: expected %s %v, got %v", current.Name, current.Predicate.Operation, current.Predicate.Value, actual)
+		}
+	}
+
+	return nil
+}
+
+func (r assertionRunner) runCertificates(asserts []model.CertificateAssert) error {
+	for _, current := range asserts {
+		actual, err := capture.ExtractCertificateField(r.resp, current.Name)
+		if err != nil {
+			return fmt.Errorf("certificate assertion failed for field %s: %w", current.Name, err)
+		}
+
+		ok, err := r.evaluate(actual, current.Predicate)
+		if err != nil {
+			return fmt.Errorf("certificate assertion error: %w", err)
+		}
+		if !ok {
+			return fmt.Errorf("certificate %s assertion failed: expected %s %v, got %v", current.Name, current.Predicate.Operation, current.Predicate.Value, actual)
+		}
+	}
+
+	return nil
+}
+
+func (r assertionRunner) runJSONPath(asserts []model.JSONPathAssert) error {
+	if len(asserts) == 0 {
+		return nil
+	}
+	if r.selectors.err != nil {
+		return fmt.Errorf("JSONPath assertion failed for %s: %w", asserts[0].Path, r.selectors.err)
+	}
+
+	for _, current := range asserts {
+		actual, err := capture.ExtractJSONPathFromData(r.selectors.data, current.Path)
+		if err != nil {
+			actual, err = resolveJSONPathAssertionValue(current, err)
+			if err != nil {
+				return err
+			}
+		}
+
+		ok, err := r.evaluate(actual, current.Predicate)
+		if err != nil {
+			return fmt.Errorf("JSONPath assertion failed for %s: %w", current.Path, err)
+		}
+		if !ok {
+			return fmt.Errorf("JSONPath assertion failed for %s: expected %s %v, but condition was not met", current.Path, current.Predicate.Operation, current.Predicate.Value)
+		}
+	}
+
+	return nil
 }

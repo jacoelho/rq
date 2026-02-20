@@ -16,14 +16,20 @@ func TestExecuteStatusAssertionsFailureMessage(t *testing.T) {
 		Header:     make(http.Header),
 	}
 
-	err := runner.executeStatusAssertions([]model.StatusAssert{
-		{
-			Predicate: model.Predicate{
-				Operation: "equals",
-				Value:     201,
+	err := runner.executeAssertions(
+		model.Asserts{
+			Status: []model.StatusAssert{
+				{
+					Predicate: model.Predicate{
+						Operation: "equals",
+						Value:     201,
+					},
+				},
 			},
 		},
-	}, resp)
+		resp,
+		selectorContext{},
+	)
 	if err == nil {
 		t.Fatal("expected assertion failure error")
 	}
@@ -43,17 +49,23 @@ func TestExecuteHeaderAssertionsMissingHeaderUsesEmptyValue(t *testing.T) {
 		Header:     make(http.Header),
 	}
 
-	err := runner.executeHeaderAssertions([]model.HeaderAssert{
-		{
-			Name: "X-Missing",
-			Predicate: model.Predicate{
-				Operation: "equals",
-				Value:     "",
+	err := runner.executeAssertions(
+		model.Asserts{
+			Headers: []model.HeaderAssert{
+				{
+					Name: "X-Missing",
+					Predicate: model.Predicate{
+						Operation: "equals",
+						Value:     "",
+					},
+				},
 			},
 		},
-	}, resp)
+		resp,
+		selectorContext{},
+	)
 	if err != nil {
-		t.Fatalf("executeHeaderAssertions() error = %v", err)
+		t.Fatalf("executeAssertions() error = %v", err)
 	}
 }
 
@@ -64,15 +76,22 @@ func TestExecuteJSONPathAssertionsMissingPathHandling(t *testing.T) {
 	jsonPathData := map[string]any{
 		"name": "alice",
 	}
+	selectors := selectorContextFromData(true, jsonPathData, nil)
 
-	err := runner.executeJSONPathAssertions([]model.JSONPathAssert{
-		{
-			Path: "$.missing",
-			Predicate: model.Predicate{
-				Operation: "exists",
+	err := runner.executeAssertions(
+		model.Asserts{
+			JSONPath: []model.JSONPathAssert{
+				{
+					Path: "$.missing",
+					Predicate: model.Predicate{
+						Operation: "exists",
+					},
+				},
 			},
 		},
-	}, jsonPathData, nil)
+		nil,
+		selectors,
+	)
 	if err == nil {
 		t.Fatal("expected exists assertion to fail for missing path")
 	}
@@ -81,15 +100,21 @@ func TestExecuteJSONPathAssertionsMissingPathHandling(t *testing.T) {
 		t.Fatalf("error = %q, want %q", err.Error(), existsWant)
 	}
 
-	err = runner.executeJSONPathAssertions([]model.JSONPathAssert{
-		{
-			Path: "$.missing",
-			Predicate: model.Predicate{
-				Operation: "equals",
-				Value:     "value",
+	err = runner.executeAssertions(
+		model.Asserts{
+			JSONPath: []model.JSONPathAssert{
+				{
+					Path: "$.missing",
+					Predicate: model.Predicate{
+						Operation: "equals",
+						Value:     "value",
+					},
+				},
 			},
 		},
-	}, jsonPathData, nil)
+		nil,
+		selectors,
+	)
 	if err == nil {
 		t.Fatal("expected equals assertion to fail for missing path")
 	}

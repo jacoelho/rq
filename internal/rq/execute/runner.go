@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/jacoelho/rq/internal/rq/assert"
 	"github.com/jacoelho/rq/internal/rq/compile"
 	"github.com/jacoelho/rq/internal/rq/config"
 	"github.com/jacoelho/rq/internal/rq/exit"
@@ -25,13 +26,14 @@ type CompiledFile struct {
 }
 
 type Runner struct {
-	client      *http.Client
-	variables   map[string]any
-	config      *config.Config
-	compiled    []CompiledFile
-	rateLimiter *rate.Limiter
-	output      io.Writer
-	errOutput   io.Writer
+	client          *http.Client
+	variables       map[string]any
+	config          *config.Config
+	compiled        []CompiledFile
+	rateLimiter     *rate.Limiter
+	assertEvaluator *assert.Evaluator
+	output          io.Writer
+	errOutput       io.Writer
 }
 
 func New(cfg *config.Config) (*Runner, *exit.Result) {
@@ -41,12 +43,13 @@ func New(cfg *config.Config) (*Runner, *exit.Result) {
 	}
 
 	return &Runner{
-		client:      client,
-		variables:   cfg.AllVariables(),
-		config:      cfg,
-		rateLimiter: newRateLimiter(cfg.RateLimit),
-		output:      os.Stdout,
-		errOutput:   os.Stderr,
+		client:          client,
+		variables:       cfg.AllVariables(),
+		config:          cfg,
+		rateLimiter:     newRateLimiter(cfg.RateLimit),
+		assertEvaluator: assert.NewEvaluator(),
+		output:          os.Stdout,
+		errOutput:       os.Stderr,
 	}, nil
 }
 
@@ -78,6 +81,14 @@ func (r *Runner) errorWriter() io.Writer {
 		return io.Discard
 	}
 	return r.errOutput
+}
+
+func (r *Runner) assertionEvaluator() *assert.Evaluator {
+	if r.assertEvaluator == nil {
+		r.assertEvaluator = assert.NewEvaluator()
+	}
+
+	return r.assertEvaluator
 }
 
 func (r *Runner) logf(format string, args ...any) {
