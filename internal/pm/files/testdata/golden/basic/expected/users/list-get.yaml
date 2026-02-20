@@ -1,0 +1,16 @@
+- method: GET
+  url: https://api.example.com/users
+  headers:
+  - key: X-Trace
+    value: trace-123
+  - key: Accept
+    value: application/json
+  query:
+  - key: include
+    value: profile
+  - key: limit
+    value: "50"
+  asserts:
+    status:
+    - op: equals
+      value: 200
