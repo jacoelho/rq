@@ -1,0 +1,1246 @@
+package execute
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/json"
+	"fmt"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/jacoelho/rq/internal/rq/capture"
+	"github.com/jacoelho/rq/internal/rq/compile"
+	"github.com/jacoelho/rq/internal/rq/config"
+	"github.com/jacoelho/rq/internal/rq/model"
+	"golang.org/x/time/rate"
+)
+
+func newDefault() *Runner {
+	return &Runner{
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+		variables:   make(map[string]any),
+		rateLimiter: rate.NewLimiter(rate.Inf, 1),
+	}
+}
+
+// checkNumericValue handles varying JSON numeric types (int, float64, json.Number).
+func checkNumericValue(t *testing.T, actual any, expected int, fieldName string) {
+	t.Helper()
+
+	switch v := actual.(type) {
+	case int:
+		if v != expected {
+			t.Errorf("%s = %v, want %d", fieldName, v, expected)
+		}
+	case float64:
+		if v != float64(expected) {
+			t.Errorf("%s = %v, want %d", fieldName, v, expected)
+		}
+	case json.Number:
+		if intVal, err := v.Int64(); err != nil {
+			t.Errorf("%s json.Number conversion failed: %v", fieldName, err)
+		} else if intVal != int64(expected) {
+			t.Errorf("%s = %v, want %d", fieldName, intVal, expected)
+		}
+	default:
+		t.Errorf("%s has unexpected type %T: %v", fieldName, v, v)
+	}
+}
+
+func TestExecuteCaptures(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Custom-Header", "test-value")
+		w.Header().Set("Server", "test-server/1.0")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"user": {
+				"id": 123,
+				"name": "Alice"
+			},
+			"status": "success",
+			"message": "Version: 1.2.3 is available"
+		}`))
+	}))
+	defer server.Close()
+
+	runner := &Runner{
+		config: &config.Config{
+			Secrets: make(map[string]any),
+		},
+	}
+
+	tests := []struct {
+		name     string
+		captures *model.Captures
+		check    func(t *testing.T, captureMap map[string]CaptureValue)
+	}{
+		{
+			name:     "nil_captures",
+			captures: nil,
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
+				if len(captureMap) != 0 {
+					t.Errorf("expected empty capture map, got %v", captureMap)
+				}
+			},
+		},
+		{
+			name: "structured_captures_status",
+			captures: &model.Captures{
+				Status: []model.StatusCapture{
+					{Name: "response_status"},
+				},
+			},
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
+				if captureMap["response_status"].Value != 200 {
+					t.Errorf("response_status = %v, want 200", captureMap["response_status"].Value)
+				}
+			},
+		},
+		{
+			name: "structured_captures_headers",
+			captures: &model.Captures{
+				Headers: []model.HeaderCapture{
+					{Name: "content_type", HeaderName: "Content-Type"},
+					{Name: "custom_header", HeaderName: "X-Custom-Header"},
+					{Name: "server_header", HeaderName: "Server"},
+					{Name: "missing_header", HeaderName: "X-Missing"},
+				},
+			},
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
+				if captureMap["content_type"].Value != "application/json" {
+					t.Errorf("content_type = %v, want application/json", captureMap["content_type"].Value)
+				}
+				if captureMap["custom_header"].Value != "test-value" {
+					t.Errorf("custom_header = %v, want test-value", captureMap["custom_header"].Value)
+				}
+				if captureMap["server_header"].Value == "" {
+					t.Error("server_header should not be empty")
+				}
+				if captureMap["missing_header"].Value != "" {
+					t.Errorf("missing_header = %v, want empty string", captureMap["missing_header"].Value)
+				}
+			},
+		},
+		{
+			name: "structured_captures_jsonpath",
+			captures: &model.Captures{
+				JSONPath: []model.JSONPathCapture{
+					{Name: "user_id", Path: "$.user.id"},
+					{Name: "user_name", Path: "$.user.name"},
+				},
+			},
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
+				if userID, exists := captureMap["user_id"]; !exists {
+					t.Error("expected capture user_id to exist")
+				} else {
+					checkNumericValue(t, userID.Value, 123, "jsonpath capture user_id")
+				}
+				if captureMap["user_name"].Value != "Alice" {
+					t.Errorf("user_name = %v, want Alice", captureMap["user_name"].Value)
+				}
+			},
+		},
+		{
+			name: "structured_captures_regex",
+			captures: &model.Captures{
+				Regex: []model.RegexCapture{
+					{Name: "version", Pattern: `Version: (\d+\.\d+\.\d+)`, Group: 1},
+					{Name: "full_version_text", Pattern: `Version: \d+\.\d+\.\d+`, Group: 0},
+				},
+			},
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
+				if captureMap["version"].Value != "1.2.3" {
+					t.Errorf("version = %v, want 1.2.3", captureMap["version"].Value)
+				}
+				if captureMap["full_version_text"].Value != "Version: 1.2.3" {
+					t.Errorf("full_version_text = %v, want 'Version: 1.2.3'", captureMap["full_version_text"].Value)
+				}
+			},
+		},
+		{
+			name: "structured_captures_body",
+			captures: &model.Captures{
+				Body: []model.BodyCapture{
+					{Name: "raw_body"},
+				},
+			},
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
+				expected := `{
+			"user": {
+				"id": 123,
+				"name": "Alice"
+			},
+			"status": "success",
+			"message": "Version: 1.2.3 is available"
+		}`
+				if captureMap["raw_body"].Value != expected {
+					t.Errorf("raw_body = %v, want %v", captureMap["raw_body"].Value, expected)
+				}
+			},
+		},
+		{
+			name: "structured_captures_mixed",
+			captures: &model.Captures{
+				Status: []model.StatusCapture{
+					{Name: "status_code"},
+				},
+				JSONPath: []model.JSONPathCapture{
+					{Name: "user_status", Path: "$.status"},
+				},
+			},
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
+				if captureMap["status_code"].Value != 200 {
+					t.Errorf("status_code = %v, want 200", captureMap["status_code"].Value)
+				}
+				if captureMap["user_status"].Value != "success" {
+					t.Errorf("user_status = %v, want success", captureMap["user_status"].Value)
+				}
+			},
+		},
+		{
+			name: "secret_captures",
+			captures: &model.Captures{
+				Headers: []model.HeaderCapture{
+					{Name: "auth_token", HeaderName: "X-Custom-Header", Redact: true},
+				},
+				JSONPath: []model.JSONPathCapture{
+					{Name: "api_key", Path: "$.user.id", Redact: true},
+				},
+				Regex: []model.RegexCapture{
+					{Name: "version", Pattern: `Version: (\d+\.\d+\.\d+)`, Group: 1, Redact: true},
+				},
+			},
+			check: func(t *testing.T, captureMap map[string]CaptureValue) {
+				if captureMap["auth_token"].Value != "test-value" {
+					t.Errorf("auth_token = %v, want test-value", captureMap["auth_token"].Value)
+				}
+				if userID, exists := captureMap["api_key"]; !exists {
+					t.Error("expected capture api_key to exist")
+				} else {
+					checkNumericValue(t, userID.Value, 123, "jsonpath capture api_key")
+				}
+				if captureMap["version"].Value != "1.2.3" {
+					t.Errorf("version = %v, want 1.2.3", captureMap["version"].Value)
+				}
+
+				if !captureMap["auth_token"].Redact {
+					t.Error("expected auth_token to have Redact=true")
+				}
+				if !captureMap["api_key"].Redact {
+					t.Error("expected api_key to have Redact=true")
+				}
+				if !captureMap["version"].Redact {
+					t.Error("expected version to have Redact=true")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := http.Get(server.URL)
+			if err != nil {
+				t.Fatalf("failed to make request: %v", err)
+			}
+			defer resp.Body.Close()
+
+			body := bytes.NewBuffer(nil)
+			body.ReadFrom(resp.Body)
+			bodyBytes := body.Bytes()
+
+			captureMap := make(map[string]CaptureValue)
+			err = runner.executeCaptures(tt.captures, resp, bodyBytes, captureMap)
+			if err != nil {
+				t.Fatalf("executeCaptures failed: %v", err)
+			}
+
+			tt.check(t, captureMap)
+		})
+	}
+}
+
+func TestExecuteRegexCapture(t *testing.T) {
+	t.Parallel()
+
+	runner := newDefault()
+
+	tests := []struct {
+		name        string
+		capture     model.RegexCapture
+		body        string
+		expectValue any
+		expectError bool
+	}{
+		{
+			name: "valid_pattern_group_1",
+			capture: model.RegexCapture{
+				Name:    "version",
+				Pattern: `version: (\d+\.\d+\.\d+)`,
+				Group:   1,
+			},
+			body:        "version: 1.2.3",
+			expectValue: "1.2.3",
+		},
+		{
+			name: "valid_pattern_group_0",
+			capture: model.RegexCapture{
+				Name:    "full_match",
+				Pattern: `error: \w+`,
+				Group:   0,
+			},
+			body:        "error: failed",
+			expectValue: "error: failed",
+		},
+		{
+			name: "no_match",
+			capture: model.RegexCapture{
+				Name:    "missing",
+				Pattern: `notfound: (.+)`,
+				Group:   1,
+			},
+			body:        "version: 1.2.3",
+			expectValue: nil,
+		},
+		{
+			name: "invalid_pattern",
+			capture: model.RegexCapture{
+				Name:    "invalid",
+				Pattern: `[invalid`,
+				Group:   1,
+			},
+			body:        "test",
+			expectError: true,
+		},
+		{
+			name: "invalid_group_index",
+			capture: model.RegexCapture{
+				Name:    "invalid_group",
+				Pattern: `version: (\d+)`,
+				Group:   5, // Only groups 0 and 1 exist
+			},
+			body:        "version: 123",
+			expectError: true,
+		},
+		{
+			name: "multiple_groups",
+			capture: model.RegexCapture{
+				Name:    "major_version",
+				Pattern: `version: (\d+)\.(\d+)\.(\d+)`,
+				Group:   1,
+			},
+			body:        "version: 1.2.3",
+			expectValue: "1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			captureMap := make(map[string]CaptureValue)
+			err := runner.executeRegexCapture(tt.capture, []byte(tt.body), captureMap)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if captureMap[tt.capture.Name].Value != tt.expectValue {
+				t.Errorf("capture %s = %v, want %v", tt.capture.Name, captureMap[tt.capture.Name].Value, tt.expectValue)
+			}
+		})
+	}
+}
+
+func TestExecuteCapturesErrorCases(t *testing.T) {
+	t.Parallel()
+
+	runner := newDefault()
+
+	tests := []struct {
+		name     string
+		captures *model.Captures
+		wantErr  bool
+	}{
+		{
+			name: "invalid_jsonpath",
+			captures: &model.Captures{
+				JSONPath: []model.JSONPathCapture{
+					{Name: "invalid", Path: "$.invalid["},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := &http.Response{
+				StatusCode: 200,
+				Header:     make(http.Header),
+			}
+			body := []byte(`{"test": "value"}`)
+			captureMap := make(map[string]CaptureValue)
+
+			err := runner.executeCaptures(tt.captures, resp, body, captureMap)
+
+			if tt.wantErr && err == nil {
+				t.Error("expected error, got nil")
+			} else if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestExtractCertificateField(t *testing.T) {
+	tests := []struct {
+		name          string
+		field         string
+		setupResponse func() *http.Response
+		expectError   bool
+		expectedValue any
+	}{
+		{
+			name:  "no TLS connection",
+			field: "subject",
+			setupResponse: func() *http.Response {
+				return &http.Response{
+					TLS: nil,
+				}
+			},
+			expectError: true,
+		},
+		{
+			name:  "empty peer certificates",
+			field: "subject",
+			setupResponse: func() *http.Response {
+				return &http.Response{
+					TLS: &tls.ConnectionState{
+						PeerCertificates: []*x509.Certificate{},
+					},
+				}
+			},
+			expectError: true,
+		},
+		{
+			name:  "unsupported field",
+			field: "invalid_field",
+			setupResponse: func() *http.Response {
+				cert := createTestCertificate(t)
+				return &http.Response{
+					TLS: &tls.ConnectionState{
+						PeerCertificates: []*x509.Certificate{cert},
+					},
+				}
+			},
+			expectError: true, // Should expect an error for unsupported field
+		},
+		{
+			name:  "subject field",
+			field: "subject",
+			setupResponse: func() *http.Response {
+				cert := createTestCertificate(t)
+				return &http.Response{
+					TLS: &tls.ConnectionState{
+						PeerCertificates: []*x509.Certificate{cert},
+					},
+				}
+			},
+			expectError:   false,
+			expectedValue: "CN=example.com",
+		},
+		{
+			name:  "issuer field",
+			field: "issuer",
+			setupResponse: func() *http.Response {
+				cert := createTestCertificate(t)
+				return &http.Response{
+					TLS: &tls.ConnectionState{
+						PeerCertificates: []*x509.Certificate{cert},
+					},
+				}
+			},
+			expectError:   false,
+			expectedValue: "CN=Test CA",
+		},
+		{
+			name:  "serial_number field",
+			field: "serial_number",
+			setupResponse: func() *http.Response {
+				cert := createTestCertificate(t)
+				return &http.Response{
+					TLS: &tls.ConnectionState{
+						PeerCertificates: []*x509.Certificate{cert},
+					},
+				}
+			},
+			expectError:   false,
+			expectedValue: "12345",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := tt.setupResponse()
+
+			certInfo, err := capture.ExtractAllCertificateFields(resp)
+
+			if err != nil {
+				if tt.expectError {
+					return // Expected error, test passes
+				} else {
+					t.Errorf("unexpected extraction error: %v", err)
+					return
+				}
+			}
+
+			var value any
+			var fieldErr error
+			switch tt.field {
+			case "subject":
+				value = certInfo.Subject
+			case "issuer":
+				value = certInfo.Issuer
+			case "expire_date":
+				value = certInfo.ExpireDate.Format("2006-01-02T15:04:05Z07:00")
+			case "serial_number":
+				value = certInfo.SerialNumber
+			default:
+				fieldErr = fmt.Errorf("unsupported certificate field: %s", tt.field)
+			}
+
+			if tt.expectError {
+				if fieldErr == nil {
+					t.Error("expected error for unsupported field, got nil")
+				}
+				return
+			}
+
+			if fieldErr != nil {
+				t.Errorf("unexpected field error: %v", fieldErr)
+				return
+			}
+
+			if tt.expectedValue != nil && value != tt.expectedValue {
+				t.Errorf("Expected value %v, got %v", tt.expectedValue, value)
+			}
+		})
+	}
+}
+
+func createTestCertificate(t *testing.T) *x509.Certificate {
+	t.Helper()
+
+	issuerTemplate := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			CommonName: "Test CA",
+		},
+		NotBefore:             time.Now().Add(-48 * time.Hour),
+		NotAfter:              time.Now().Add(2 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+
+	subjectTemplate := x509.Certificate{
+		SerialNumber: big.NewInt(12345),
+		Subject: pkix.Name{
+			CommonName: "example.com",
+		},
+		NotBefore:             time.Now().Add(-24 * time.Hour),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+
+	issuerPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Failed to generate issuer private key: %v", err)
+	}
+
+	subjectPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Failed to generate subject private key: %v", err)
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, &subjectTemplate, &issuerTemplate, &subjectPriv.PublicKey, issuerPriv)
+	if err != nil {
+		t.Fatalf("Failed to create certificate: %v", err)
+	}
+
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("Failed to parse certificate: %v", err)
+	}
+
+	return cert
+}
+
+func TestExecuteStepWithRetries(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		retries         int
+		serverResponses []struct {
+			status int
+			body   string
+		}
+		expectedAttempts int
+		expectedError    bool
+	}{
+		{
+			name:    "no_retries_success",
+			retries: 0,
+			serverResponses: []struct {
+				status int
+				body   string
+			}{
+				{status: 200, body: `{"status": "success"}`},
+			},
+			expectedAttempts: 1,
+			expectedError:    false,
+		},
+		{
+			name:    "no_retries_failure",
+			retries: 0,
+			serverResponses: []struct {
+				status int
+				body   string
+			}{
+				{status: 500, body: `{"status": "error"}`},
+			},
+			expectedAttempts: 1,
+			expectedError:    true,
+		},
+		{
+			name:    "retry_until_success",
+			retries: 3,
+			serverResponses: []struct {
+				status int
+				body   string
+			}{
+				{status: 500, body: `{"status": "error"}`},
+				{status: 500, body: `{"status": "error"}`},
+				{status: 200, body: `{"status": "success"}`},
+			},
+			expectedAttempts: 3,
+			expectedError:    false,
+		},
+		{
+			name:    "retry_all_attempts_fail",
+			retries: 2,
+			serverResponses: []struct {
+				status int
+				body   string
+			}{
+				{status: 500, body: `{"status": "error"}`},
+				{status: 500, body: `{"status": "error"}`},
+				{status: 500, body: `{"status": "error"}`},
+			},
+			expectedAttempts: 3,
+			expectedError:    true,
+		},
+		{
+			name:    "retry_first_attempt_success",
+			retries: 3,
+			serverResponses: []struct {
+				status int
+				body   string
+			}{
+				{status: 200, body: `{"status": "success"}`},
+			},
+			expectedAttempts: 1,
+			expectedError:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attemptCount := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if attemptCount < len(tt.serverResponses) {
+					response := tt.serverResponses[attemptCount]
+					w.WriteHeader(response.status)
+					w.Write([]byte(response.body))
+				} else {
+					lastResponse := tt.serverResponses[len(tt.serverResponses)-1]
+					w.WriteHeader(lastResponse.status)
+					w.Write([]byte(lastResponse.body))
+				}
+				attemptCount++
+			}))
+			defer server.Close()
+
+			runner := newDefault()
+
+			step := model.Step{
+				Method: "GET",
+				URL:    server.URL,
+				Options: model.Options{
+					Retries: tt.retries,
+				},
+				Asserts: model.Asserts{
+					Status: []model.StatusAssert{
+						{
+							Predicate: model.Predicate{
+								Operation: "equals",
+								Value:     200,
+							},
+						},
+					},
+				},
+			}
+
+			captures := make(map[string]CaptureValue)
+			requestMade, err := runner.executeStep(context.Background(), step, captures, "")
+
+			if !requestMade {
+				t.Error("Expected request to be made")
+			}
+
+			if tt.expectedError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tt.expectedError && err != nil {
+				t.Errorf("Expected no error but got: %v", err)
+			}
+
+			if attemptCount != tt.expectedAttempts {
+				t.Errorf("Expected %d attempts, got %d", tt.expectedAttempts, attemptCount)
+			}
+		})
+	}
+}
+
+func TestExecuteStepWithRetriesCaptureFail(t *testing.T) {
+	t.Parallel()
+
+	attemptCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attemptCount++
+		w.WriteHeader(200)
+		if attemptCount <= 2 {
+			w.Write([]byte(`{"name": "invalid"}`)) // Will fail JSONPath capture assertion
+		} else {
+			w.Write([]byte(`{"name": "Alice"}`)) // Will succeed on 3rd attempt
+		}
+	}))
+	defer server.Close()
+
+	runner := newDefault()
+
+	step := model.Step{
+		Method: "GET",
+		URL:    server.URL,
+		Options: model.Options{
+			Retries: 3,
+		},
+		Asserts: model.Asserts{
+			JSONPath: []model.JSONPathAssert{
+				{
+					Path: "$.name",
+					Predicate: model.Predicate{
+						Operation: "equals",
+						Value:     "Alice",
+					},
+				},
+			},
+		},
+	}
+
+	captures := make(map[string]CaptureValue)
+	requestMade, err := runner.executeStep(context.Background(), step, captures, "")
+
+	if !requestMade {
+		t.Error("Expected request to be made")
+	}
+
+	if err != nil {
+		t.Errorf("Expected success after retries but got error: %v", err)
+	}
+
+	if attemptCount != 3 {
+		t.Errorf("Expected 3 attempts, got %d", attemptCount)
+	}
+}
+
+func TestExecuteStepWithRetriesNoRetriesNeeded(t *testing.T) {
+	t.Parallel()
+
+	attemptCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attemptCount++
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status": "success"}`))
+	}))
+	defer server.Close()
+
+	runner := newDefault()
+
+	step := model.Step{
+		Method: "GET",
+		URL:    server.URL,
+		Options: model.Options{
+			Retries: 5, // Has retries configured but shouldn't need them
+		},
+		Asserts: model.Asserts{
+			Status: []model.StatusAssert{
+				{
+					Predicate: model.Predicate{
+						Operation: "equals",
+						Value:     200,
+					},
+				},
+			},
+		},
+	}
+
+	captures := make(map[string]CaptureValue)
+	requestMade, err := runner.executeStep(context.Background(), step, captures, "")
+
+	if !requestMade {
+		t.Error("Expected request to be made")
+	}
+
+	if err != nil {
+		t.Errorf("Expected no error but got: %v", err)
+	}
+
+	if attemptCount != 1 {
+		t.Errorf("Expected 1 attempt (no retries needed), got %d", attemptCount)
+	}
+}
+
+func TestExecuteStepRetriesWithTemplateError(t *testing.T) {
+	t.Parallel()
+
+	runner := newDefault()
+
+	step := model.Step{
+		Method: "GET",
+		URL:    "{{.invalid_template",
+		Options: model.Options{
+			Retries: 3,
+		},
+	}
+
+	captures := make(map[string]CaptureValue)
+	requestMade, err := runner.executeStep(context.Background(), step, captures, "")
+
+	if requestMade {
+		t.Error("Expected no request to be made due to template error")
+	}
+
+	if err == nil {
+		t.Error("Expected error due to invalid template")
+	}
+
+	if !bytes.Contains([]byte(err.Error()), []byte("failed to process URL template")) {
+		t.Errorf("Expected template error, got: %v", err)
+	}
+}
+
+func TestValidateStep(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		step        model.Step
+		expectError bool
+		errorText   string
+	}{
+		{
+			name: "valid_step",
+			step: model.Step{
+				Method: "GET",
+				URL:    "https://example.com",
+				Options: model.Options{
+					Retries: 3,
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "empty_method",
+			step: model.Step{
+				Method: "",
+				URL:    "https://example.com",
+			},
+			expectError: true,
+			errorText:   "step method cannot be empty",
+		},
+		{
+			name: "invalid_method",
+			step: model.Step{
+				Method: "INVALID",
+				URL:    "https://example.com",
+			},
+			expectError: true,
+			errorText:   "unsupported HTTP method: INVALID",
+		},
+		{
+			name: "empty_url",
+			step: model.Step{
+				Method: "GET",
+				URL:    "",
+			},
+			expectError: true,
+			errorText:   "step URL cannot be empty",
+		},
+		{
+			name: "negative_retries",
+			step: model.Step{
+				Method: "GET",
+				URL:    "https://example.com",
+				Options: model.Options{
+					Retries: -1,
+				},
+			},
+			expectError: true,
+			errorText:   "retries must be >= 0, got: -1",
+		},
+		{
+			name: "zero_retries",
+			step: model.Step{
+				Method: "GET",
+				URL:    "https://example.com",
+				Options: model.Options{
+					Retries: 0,
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_post_method",
+			step: model.Step{
+				Method: "POST",
+				URL:    "https://example.com/api",
+				Body:   `{"key": "value"}`,
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_put_method",
+			step: model.Step{
+				Method: "PUT",
+				URL:    "https://example.com/api/1",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_patch_method",
+			step: model.Step{
+				Method: "PATCH",
+				URL:    "https://example.com/api/1",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_delete_method",
+			step: model.Step{
+				Method: "DELETE",
+				URL:    "https://example.com/api/1",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_head_method",
+			step: model.Step{
+				Method: "HEAD",
+				URL:    "https://example.com",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_options_method",
+			step: model.Step{
+				Method: "OPTIONS",
+				URL:    "https://example.com",
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := compile.ValidateStep(tt.step)
+
+			if tt.expectError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Expected no error but got: %v", err)
+			}
+			if tt.expectError && err != nil && !bytes.Contains([]byte(err.Error()), []byte(tt.errorText)) {
+				t.Errorf("Expected error to contain %q, got: %v", tt.errorText, err)
+			}
+		})
+	}
+}
+
+func TestExecuteFiles_ValidatesBeforeExecution(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "invalid.yaml")
+
+	content := `
+- method: TRACE
+  url: https://api.example.com/health
+`
+	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	runner := newDefault()
+	summary, err := runner.ExecuteFiles(context.Background(), []string{testFile})
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+
+	if summary == nil {
+		t.Fatal("expected non-nil summary")
+	}
+	if summary.ExecutedRequests != 0 {
+		t.Fatalf("expected 0 executed requests, got %d", summary.ExecutedRequests)
+	}
+	if summary.FailedFiles != 1 {
+		t.Fatalf("expected 1 failed file, got %d", summary.FailedFiles)
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte("failed to validate file")) {
+		t.Fatalf("expected validation boundary error, got: %v", err)
+	}
+}
+
+func TestExecuteCompiledFilesContinuesAfterFailureAndReturnsFirstError(t *testing.T) {
+	t.Parallel()
+
+	runner := newDefault()
+	files := []CompiledFile{
+		{
+			Filename: "first.yaml",
+			Steps:    nil,
+		},
+		{
+			Filename: "broken.yaml",
+			Steps: []model.Step{
+				{
+					Method: "GET",
+					URL:    "{{.invalid_template",
+				},
+			},
+		},
+		{
+			Filename: "third.yaml",
+			Steps:    nil,
+		},
+	}
+
+	summary, err := runner.executeCompiledFiles(context.Background(), files)
+	if err == nil {
+		t.Fatal("expected first error, got nil")
+	}
+
+	if summary == nil {
+		t.Fatal("expected non-nil summary")
+	}
+	if summary.ExecutedFiles != 3 {
+		t.Fatalf("summary.ExecutedFiles = %d, want 3", summary.ExecutedFiles)
+	}
+	if summary.FailedFiles != 1 {
+		t.Fatalf("summary.FailedFiles = %d, want 1", summary.FailedFiles)
+	}
+	if summary.SucceededFiles != 2 {
+		t.Fatalf("summary.SucceededFiles = %d, want 2", summary.SucceededFiles)
+	}
+	if len(summary.FileResults) != 3 {
+		t.Fatalf("len(summary.FileResults) = %d, want 3", len(summary.FileResults))
+	}
+	if summary.FileResults[1].Error == nil {
+		t.Fatalf("summary.FileResults[1].Error = nil, want non-nil")
+	}
+	if summary.FileResults[2].Error != nil {
+		t.Fatalf("summary.FileResults[2].Error = %v, want nil", summary.FileResults[2].Error)
+	}
+}
+
+func TestExecuteFileExecutorsReturnCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	runner := newDefault()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	fileSummary, fileErr := runner.ExecuteFiles(ctx, []string{"ignored.yaml"})
+	if fileErr != context.Canceled {
+		t.Fatalf("ExecuteFiles() error = %v, want %v", fileErr, context.Canceled)
+	}
+	if fileSummary == nil {
+		t.Fatal("expected non-nil summary from ExecuteFiles")
+	}
+	if fileSummary.ExecutedFiles != 0 {
+		t.Fatalf("ExecuteFiles summary.ExecutedFiles = %d, want 0", fileSummary.ExecutedFiles)
+	}
+
+	compiledSummary, compiledErr := runner.executeCompiledFiles(ctx, []CompiledFile{
+		{Filename: "ignored.yaml"},
+	})
+	if compiledErr != context.Canceled {
+		t.Fatalf("executeCompiledFiles() error = %v, want %v", compiledErr, context.Canceled)
+	}
+	if compiledSummary == nil {
+		t.Fatal("expected non-nil summary from executeCompiledFiles")
+	}
+	if compiledSummary.ExecutedFiles != 0 {
+		t.Fatalf("executeCompiledFiles summary.ExecutedFiles = %d, want 0", compiledSummary.ExecutedFiles)
+	}
+}
+
+func TestRunOnceCompilesConfiguredFilesOnce(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "test.yaml")
+
+	validContent := "- method: GET\n  url: " + server.URL + "\n"
+	if err := os.WriteFile(testFile, []byte(validContent), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	runner := newDefault()
+	runner.config = &config.Config{
+		TestFiles: []string{testFile},
+	}
+
+	if _, err := runner.runOnce(context.Background()); err != nil {
+		t.Fatalf("first runOnce() error = %v", err)
+	}
+
+	invalidContent := "- method: TRACE\n  url: " + server.URL + "\n"
+	if err := os.WriteFile(testFile, []byte(invalidContent), 0644); err != nil {
+		t.Fatalf("failed to overwrite test file: %v", err)
+	}
+
+	if _, err := runner.runOnce(context.Background()); err != nil {
+		t.Fatalf("second runOnce() error = %v", err)
+	}
+
+	if callCount != 2 {
+		t.Fatalf("callCount = %d, want 2", callCount)
+	}
+}
+
+func TestQueryParameters(t *testing.T) {
+	tests := []struct {
+		name           string
+		step           model.Step
+		expectedParams map[string]string
+	}{
+		{
+			name: "basic_query_parameters",
+			step: model.Step{
+				Method: "GET",
+				URL:    "/search",
+				Query: model.KeyValues{
+					{Key: "search", Value: "Install Linux"},
+					{Key: "order", Value: "newest"},
+				},
+			},
+			expectedParams: map[string]string{
+				"search": "Install Linux",
+				"order":  "newest",
+			},
+		},
+		{
+			name: "query_parameters_with_existing_url_params",
+			step: model.Step{
+				Method: "GET",
+				URL:    "/search?existing=value",
+				Query: model.KeyValues{
+					{Key: "search", Value: "Install Linux"},
+					{Key: "order", Value: "newest"},
+				},
+			},
+			expectedParams: map[string]string{
+				"existing": "value",
+				"search":   "Install Linux",
+				"order":    "newest",
+			},
+		},
+		{
+			name: "query_parameters_with_template_variables",
+			step: model.Step{
+				Method: "GET",
+				URL:    "/search",
+				Query: model.KeyValues{
+					{Key: "search", Value: "{{.search_term}}"},
+					{Key: "limit", Value: "{{.limit}}"},
+				},
+			},
+			expectedParams: map[string]string{
+				"search": "Install Linux",
+				"limit":  "20",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := newDefault()
+			captures := map[string]CaptureValue{
+				"search_term": {Value: "Install Linux", Redact: false},
+				"limit":       {Value: "20", Redact: false},
+			}
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				for expectedKey, expectedValue := range tt.expectedParams {
+					actualValue := r.URL.Query().Get(expectedKey)
+					if actualValue != expectedValue {
+						t.Errorf("Query parameter %s: expected %q, got %q", expectedKey, expectedValue, actualValue)
+					}
+				}
+
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"status": "ok"}`))
+			}))
+			defer server.Close()
+
+			tt.step.URL = server.URL + tt.step.URL
+
+			_, err := runner.executeStepAttempt(context.Background(), tt.step, captures, "")
+			if err != nil {
+				t.Errorf("executeStepAttempt failed: %v", err)
+			}
+		})
+	}
+}

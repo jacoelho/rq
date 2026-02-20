@@ -1,0 +1,6 @@
+- method: POST
+  url: https://api.example.com/users
+  headers:
+  - key: Content-Type
+    value: application/json
+  body: "{\"name\":\"{{.username}}\"}"
