@@ -16,6 +16,7 @@ rq runs HTTP requests defined in YAML files. It supports assertions, data captur
 
 ```bash
 go install github.com/jacoelho/rq/cmd/rq@latest
+go install github.com/jacoelho/rq/cmd/pm2rq@latest
 ```
 
 ---
@@ -61,7 +62,7 @@ rq [options] <file1.yaml> [file2.yaml...]
 | `--secret-salt SALT`  | Salt for secret redaction hashes                 |
 | `--rate-limit N`      | Requests per second (0 = unlimited)              |
 | `--output FORMAT`     | Output format: `text` or `json`                  |
-| `--repeat N`          | Repeat test N times (negative = infinite)        |
+| `--repeat N`          | Additional runs after first (negative = infinite) |
 | `--insecure`          | Skip TLS verification                            |
 | `--cacert FILE`       | Custom CA certificate                            |
 | `--timeout DURATION`  | Request timeout (default: 30s)                   |
@@ -69,6 +70,23 @@ rq [options] <file1.yaml> [file2.yaml...]
 | `-v, --version`       | Show version                                     |
 
 When using `--output text` or `--output json`, formatted result payloads are written to stdout. Operational/errors logs and `--debug` request/response payloads are written to stderr.
+
+## Collection Migration
+
+Use `pm2rq` to migrate collection JSON exports into rq YAML files:
+
+```bash
+pm2rq --input collection.json --out ./migrated
+```
+
+Behavior:
+
+- Each source request generates exactly one YAML file.
+- Folder hierarchy is mirrored under the output directory.
+- Variable placeholders are normalized to rq template syntax (`{{.name}}`).
+- Unsupported script/body/request shapes are emitted as error diagnostics and the corresponding output file is skipped.
+- Non-fatal gaps are reported with warning diagnostics and extension hints.
+- Exit code is `1` when any error diagnostic is emitted; warning-only migrations return `0`.
 
 ---
 
@@ -107,6 +125,8 @@ Each YAML file contains a list of HTTP steps:
 
 ### Query Parameters
 
+`query` accepts both map syntax and ordered key/value syntax.
+
 ```yaml
 query:
   search: Install Linux
@@ -121,6 +141,18 @@ query:
   user_id: "{{uuidv4}}"
   timestamp: "{{timestamp}}"
 ```
+
+Ordered syntax (useful for deterministic output and repeated keys):
+
+```yaml
+query:
+  - key: search
+    value: Install Linux
+  - key: order
+    value: newest
+```
+
+`headers` follows the same map-or-ordered syntax rule.
 
 ---
 
@@ -143,7 +175,7 @@ asserts:
       value: "John Doe"
 ```
 
-**Operators:** `equals`, `not_equals`, `contains`, `regex`, `exists`, `length`
+**Operators:** `equals`, `not_equals`, `contains`, `regex`, `exists`, `length`, `greater_than`, `less_than`, `greater_than_or_equal`, `less_than_or_equal`, `starts_with`, `ends_with`, `not_contains`, `in`, `type_is`
 
 ---
 
@@ -203,6 +235,7 @@ body: |
 ### Request Options
 
 - **Retries:**  
+  Additional attempts after the first request attempt.
   ```yaml
   options:
     retries: 3
@@ -212,6 +245,24 @@ body: |
   options:
     follow_redirect: false
   ```
+
+---
+
+### Conditional Steps
+
+Run a step only when a condition is true:
+
+```yaml
+- method: GET
+  url: https://api.example.com/orders
+  when: auth_token != null && is_ready
+```
+
+Supported `when` syntax:
+
+- Literals: strings, numbers, booleans, `null`
+- Variables: captured values and configured variables
+- Operators: `==`, `!=`, `&&`, `||`, `!`, parentheses
 
 ---
 
@@ -272,7 +323,7 @@ make examples
 - **Rate limiting:**  
   `rq --rate-limit 10 test.yaml`
 - **Repeated execution:**  
-  `rq --repeat 100 test.yaml`
+  `rq --repeat 100 test.yaml` (runs 101 total iterations)
 - **Exit codes:**  
   `0` = success, `1` = failure or error
 
